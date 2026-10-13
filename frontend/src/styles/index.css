@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/* Dark mode is driven by a class on <html> (user preference: light / dark / system). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------ design tokens */
+:root {
+  /* brand (overridden per colour theme below). NFSU official palette:
+     indigo #322B6A · red #C02222 · gold #CDAD68 (sampled from the university emblem) */
+  --brand: #a8202c;
+  --brand-strong: #8a1822;
+  --brand-fg: #ffffff;
+  --gold: #cdad68;
+
+  /* surfaces */
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #f8f9fc;
+  --border: #e5e7ef;
+  --text: #111827;
+  --muted: #6b7280;
+
+  /* sidebar (NFSU indigo) */
+  --side: #241f57;
+  --side-2: #322b6a;
+  --side-text: #d3d0ea;
+
+  --ok: #16a34a;
+  --warn: #d97706;
+  --bad: #dc2626;
+  --info: #2563eb;
+  --radius: 12px;
+}
+
+.dark {
+  --bg: #0b1020;
+  --surface: #121a2e;
+  --surface-2: #172138;
+  --border: #253151;
+  --text: #e8ecf6;
+  --muted: #94a0bd;
+  --side: #110e2b;
+  --side-2: #1f1a47;
+  --side-text: #c3bfe0;
+}
+
+[data-theme="nfsu"]   { --brand: #a8202c; --brand-strong: #8a1822; }
+[data-theme="blue"]   { --brand: #2563eb; --brand-strong: #1d4ed8; }
+[data-theme="green"]  { --brand: #15803d; --brand-strong: #166534; }
+[data-theme="purple"] { --brand: #7c3aed; --brand-strong: #6d28d9; }
+[data-theme="orange"] { --brand: #ea580c; --brand-strong: #c2410c; }
+[data-theme="teal"]   { --brand: #0d9488; --brand-strong: #0f766e; }
+.dark[data-theme="nfsu"] { --brand: #d0363f; --brand-strong: #b42a33; }
+
+@theme {
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-fg: var(--brand-fg);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-side: var(--side);
+  --color-side-2: var(--side-2);
+  --color-side-text: var(--side-text);
+  --color-gold: var(--gold);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-info: var(--info);
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Reduced motion: respect both the OS setting and the in-app "Animations" toggle. */
+.no-anim *, .no-anim *::before, .no-anim *::after { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Subject colour palette for timetable chips (colour-blind friendly hues, works in both modes). */
+.chip-0  { --c: #2563eb; } .chip-1  { --c: #16a34a; } .chip-2  { --c: #d97706; } .chip-3  { --c: #7c3aed; }
+.chip-4  { --c: #db2777; } .chip-5  { --c: #0891b2; } .chip-6  { --c: #65a30d; } .chip-7  { --c: #c2410c; }
+.chip-8  { --c: #4f46e5; } .chip-9  { --c: #0d9488; } .chip-10 { --c: #a21caf; } .chip-11 { --c: #b45309; }
+.chip {
+  background: color-mix(in oklab, var(--c) 14%, var(--surface));
+  border-color: color-mix(in oklab, var(--c) 45%, transparent);
+  color: color-mix(in oklab, var(--c) 70%, var(--text));
+}
+.chip-bar { background: var(--c); }
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--muted) 35%, transparent); border-radius: 8px; }
+
+/* Print: only the timetable, landscape, no app chrome. */
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .print-area { box-shadow: none !important; border: none !important; }
+}
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.animate-fade-in { animation: fade-in .18s ease-out; }

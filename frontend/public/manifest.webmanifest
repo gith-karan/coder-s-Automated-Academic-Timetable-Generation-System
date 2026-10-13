@@ -1,0 +1,9 @@
+{
+  "name": "NFSU Timetable System",
+  "short_name": "NFSU Timetable",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1E1A4D",
+  "theme_color": "#322B6A",
+  "icons": [{ "src": "/brand/nfsu-shield.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }]
+}
