@@ -29,7 +29,7 @@ export function Brand({ compact }: { compact?: boolean }) {
 
 function Sidebar({ compact, onNavigate }: { compact: boolean; onNavigate?: () => void }) {
   const { me } = useAuth();
-  const items = navFor(me?.role);
+  const items = navFor(me);
   const sections = useMemo(() => {
     const out: [NavItem["section"], NavItem[]][] = [];
     for (const it of items) {
@@ -78,17 +78,7 @@ function Sidebar({ compact, onNavigate }: { compact: boolean; onNavigate?: () =>
           </div>
         ))}
       </nav>
-      {me && (
-        <div className={cn("flex items-center gap-3 border-t border-white/10 p-4", compact && "justify-center px-2")}>
-          <div className="grid size-9 shrink-0 place-items-center rounded-full bg-gold/90 text-sm font-bold text-side">{initials(me.full_name)}</div>
-          {!compact && (
-            <div className="min-w-0 leading-tight">
-              <p className="truncate text-sm font-semibold text-white">{me.full_name}</p>
-              <p className="text-xs text-side-text/70">{ROLE_LABEL[me.role]}</p>
-            </div>
-          )}
-        </div>
-      )}
+      {!compact && <p className="border-t border-white/10 px-5 py-3 text-[10px] text-side-text/50">National Forensic Sciences University</p>}
     </aside>
   );
 }
@@ -160,7 +150,7 @@ function GlobalSearch() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
-  const items = navFor(me?.role).filter((n) => q && n.label.toLowerCase().includes(q.toLowerCase()));
+  const items = navFor(me).filter((n) => q && n.label.toLowerCase().includes(q.toLowerCase()));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

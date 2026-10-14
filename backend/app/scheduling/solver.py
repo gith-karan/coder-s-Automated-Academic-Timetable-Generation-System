@@ -125,6 +125,7 @@ class TimetableModel:
         for vs in occ.values():
             if len(vs) > 1:
                 m.AddAtMostOne(vs)
+        self._occ = occ
 
         # Daily limits
         for (rtype, rid, _day), items in starts_by.items():
@@ -181,6 +182,9 @@ class TimetableModel:
                         cost += o.preferred_weight * 3
                 if s + u.length == p.grid.n_periods(d):
                     cost += o.late_weight
+                win = p.rules.subject_windows.get(u.subject_id)
+                if win and not win.hard and not all(c in win.allowed for c in cov):
+                    cost += win.weight * 3
                 home = p.groups[u.group_id].home_room if u.group_id in p.groups else None
                 if u.kind == "THEORY" and home and rid != home:
                     cost += o.home_room_weight
@@ -193,6 +197,27 @@ class TimetableModel:
                     penalty.append(cost * v)
                 if prev is not None and (prev.day, prev.period, prev.room_id) == (d, s, rid):
                     m.AddHint(v, 1)
+
+        # Custom rule: at most N consecutive teaching periods per faculty member
+        grid = p.grid
+        for f in p.faculty.values():
+            rule = p.rules.consecutive_for(f.id)
+            if not rule:
+                continue
+            n, hard, weight = rule
+            for d in grid.days:
+                for q in range(grid.n_periods(d) - n):
+                    if not grid.contiguous(d, q, n + 1):
+                        continue
+                    vs = [v for k in range(q, q + n + 1) for v in self._occ.get(("faculty", f.id, d, k), [])]
+                    if len(vs) <= n:
+                        continue
+                    if hard:
+                        m.Add(sum(vs) <= n)
+                    else:
+                        over = m.NewBoolVar("consec_over")
+                        m.Add(sum(vs) <= n + over)
+                        penalty.append(weight * 6 * over)
 
         # Symmetry breaking for interchangeable units (strict mode only, no pins/previous)
         if not self.relaxed and not self.assumption:

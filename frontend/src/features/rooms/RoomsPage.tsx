@@ -1,33 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, FlaskConical, School } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { HelpTip } from "@/components/ui/overlay";
 import { useAll, useSave } from "@/lib/hooks";
 import type { CalendarData, LabType, Room } from "@/lib/types";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/display";
 import { Select } from "@/components/ui/form";
 import { ResourcePage, type ResourceConfig } from "@/components/shared/ResourcePage";
-import { availabilityToSlots, SlotPainter, slotsToAvailability } from "@/components/shared/SlotPainter";
+import { AvailabilityPanel } from "@/components/shared/AvailabilityPanel";
+import { availabilityToSlots, slotsToAvailability } from "@/components/shared/SlotPainter";
 
-function RoomBlocks({ room }: { room: Room }) {
+function RoomBlocks({ room, readOnly }: { room: Room; readOnly: boolean }) {
   const cal = useQuery({ queryKey: ["calendar"], queryFn: () => api.get<CalendarData>("/calendar") });
   const save = useSave<Room>("rooms");
   const initial = useMemo(() => (cal.data ? availabilityToSlots(cal.data.grid, { unavailable: room.unavailable }) : null), [cal.data, room]);
-  const [slots, setSlots] = useState(initial);
-  useEffect(() => setSlots(initial), [initial]);
-  if (!cal.data || !slots) return null;
+  if (!cal.data || !initial) return null;
+  const onSave = (slots: typeof initial) =>
+    save.mutateAsync({ id: room.id, body: { unavailable: slotsToAvailability(cal.data.grid, slots, {}).unavailable } })
+      .then(() => { toast.success("Room availability saved"); return true; })
+      .catch((e) => { toast.error(e instanceof ApiError ? e.message : "Could not save"); return false; });
   return (
     <div className="mt-8 border-t border-line pt-6">
-      <h3 className="mb-1 text-sm font-semibold">Availability</h3>
-      <p className="mb-4 text-xs text-muted">Block periods when this room cannot be used (maintenance, exams, other departments).</p>
-      <SlotPainter grid={cal.data.grid} value={slots} onChange={setSlots} brushes={["available", "unavailable"]} />
-      <div className="mt-3 flex justify-end">
-        <Button size="sm" loading={save.isPending}
-          onClick={() => save.mutate({ id: room.id, body: { unavailable: slotsToAvailability(cal.data.grid, slots, {}).unavailable } },
-            { onSuccess: () => toast.success("Room availability saved") })}>Save availability</Button>
-      </div>
+      <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">Availability <HelpTip>Red periods are blocked (maintenance, examinations, other departments). The generator never uses this room then.</HelpTip></h3>
+      <AvailabilityPanel grid={cal.data.grid} initial={initial} brushes={["available", "unavailable"]} canEdit={!readOnly} onSave={onSave} />
     </div>
   );
 }
@@ -54,9 +51,9 @@ export default function RoomsPage() {
       { name: "name", label: "Name", required: true, placeholder: "Classroom 101" },
       { name: "lab_type_id", label: "Laboratory type", type: "select", required: true, show: (v) => v.kind === "LAB",
         options: labTypes.data?.map((l) => ({ value: l.id, label: l.name })) ?? [] },
-      { name: "capacity", label: "Seating capacity", type: "number", min: 1, max: 2000, required: true, half: true },
+      { name: "capacity", label: "Seating capacity", type: "number", min: 1, max: 1000, required: true, half: true },
       { name: "building", label: "Building", half: true, placeholder: "SCSDF Block" },
-      { name: "is_active", label: "Available for scheduling", type: "switch" },
+      { name: "is_active", label: "Available for scheduling (switch off for rooms under renovation; the generator will skip it)", type: "switch" },
     ],
     emptyValues: { code: "", name: "", kind: "CLASSROOM", lab_type_id: "", capacity: 60, building: "", is_active: true },
     toValues: (r) => ({ ...r, lab_type_id: r.lab_type_id ?? "", building: r.building ?? "" }),
@@ -66,7 +63,7 @@ export default function RoomsPage() {
         <option value="">All rooms</option><option value="CLASSROOM">Classrooms</option><option value="LAB">Laboratories</option>
       </Select>
     ),
-    extraTabs: (row) => <RoomBlocks room={row} />,
+    extraTabs: (row, readOnly) => <RoomBlocks room={row} readOnly={readOnly} />,
   };
   return <ResourcePage cfg={cfg} />;
 }

@@ -1,0 +1,36 @@
+# Production reverse proxy: HTTPS (automatic certificates), security headers, static SPA, API proxy.
+# Usage: set SITE_ADDRESS (e.g. timetable.nfsu.ac.in) and run `caddy run --config deploy/Caddyfile`.
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+	}
+
+	# API (FastAPI/uvicorn on the private network only)
+	handle /api/* {
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy 127.0.0.1:8000 {
+			header_up X-Request-ID {http.request.uuid}
+		}
+	}
+
+	# Built frontend (frontend/dist); unknown paths fall back to index.html for client-side routing
+	handle {
+		root * /srv/nfsu-timetable/frontend/dist
+		try_files {path} /index.html
+		file_server
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+	}
+}

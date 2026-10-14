@@ -38,11 +38,18 @@ def generate(problem: Problem, *, time_limit_s: float, workers: int, on_progress
     errs = prechecks.errors(diags)
     stats: dict = {"units": len(problem.units), "periods_per_week": len(problem.grid.all_slots())}
     if errs:
-        return Outcome("PRECHECK_FAILED", diagnostics=[d.to_dict() for d in diags], stats=stats,
-                       unassigned=[{"key": k} for d in errs for k in d.sessions][:500])
+        blocked = []
+        for d in errs:
+            for k in d.sessions:
+                u = problem.unit_by_key.get(k)
+                if u and all(b["key"] != k for b in blocked):
+                    blocked.append({"key": k, "subject_code": u.subject_code, "subject_name": u.subject_name,
+                                    "audience": u.audience, "kind": u.kind, "length": u.length,
+                                    "reason": d.message})
+        return Outcome("PRECHECK_FAILED", diagnostics=[d.to_dict() for d in diags], stats=stats, unassigned=blocked[:500])
     if not problem.units:
-        return Outcome("PRECHECK_FAILED", stats=stats, diagnostics=[prechecks.Diagnostic(
-            "NOTHING_TO_SCHEDULE", "ERROR", "There are no sessions to schedule. Add subjects with weekly periods.",
+        return Outcome("PRECHECK_FAILED", stats=stats, diagnostics=[d.to_dict() for d in diags] or [prechecks.Diagnostic(
+            "NOTHING_TO_SCHEDULE", "ERROR", "There are no sessions to schedule. Add classes and subjects with weekly periods.",
             fix={"page": "subjects"}).to_dict()])
 
     emit({"event": "phase", "phase": "solve", "message": "Building and solving the timetable model"})

@@ -42,11 +42,18 @@ export default function GeneratePage() {
   const drafts = timetables.data?.filter((t) => t.status === "DRAFT") ?? [];
 
   const [target, setTarget] = useState<string>("new");
-  const [name, setName] = useState("Odd Semester 2026-27");
+  const now = new Date();
+  const y = now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1; // academic year starts in June/July
+  const [year, setYear] = useState(`${y}-${String((y + 1) % 100).padStart(2, "0")}`);
+  const [term, setTerm] = useState<"ODD" | "EVEN">(now.getMonth() >= 5 ? "ODD" : "EVEN");
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
+  const [dupSuggestion, setDupSuggestion] = useState<string | null>(null);
   const [programmeId, setProgrammeId] = useState("");
   const [semester, setSemester] = useState("");
   const [mode, setMode] = useState<"full" | "unlocked">("full");
-  const [limit, setLimit] = useState(30);
+  const autoName = `${term === "ODD" ? "Odd" : "Even"} Semester ${year}`;
+  const finalName = nameTouched ? name : autoName;
   const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [final, setFinal] = useState<string | null>(null);
@@ -58,22 +65,34 @@ export default function GeneratePage() {
   useEffect(() => () => esRef.current?.close(), []);
 
   const scope = { programme_ids: programmeId ? [programmeId] : [], semesters: semester ? [Number(semester)] : [] };
+  const draftTerm = drafts.find((d) => d.id === target)?.term ?? null;
+  const readinessTerm = target === "new" ? term : draftTerm;
   const readiness = useQuery({
-    queryKey: ["readiness", scope],
-    queryFn: () => api.get<Readiness>(`/readiness${qs({ programme_ids: scope.programme_ids, semesters: scope.semesters })}`),
+    queryKey: ["readiness", scope, readinessTerm, target],
+    queryFn: () => api.get<Readiness>(`/readiness${qs({ programme_ids: scope.programme_ids, semesters: scope.semesters, term: readinessTerm ?? undefined })}`),
     enabled: step >= 1,
   });
   const selectedProgramme = programmes.data?.find((p) => p.id === programmeId);
 
-  const start = async () => {
+  const start = async (nameOverride?: string) => {
     try {
       let tid = target;
       if (target === "new") {
-        const tt = await api.post<TimetableSummary>("/timetables", { name, ...scope });
-        tid = tt.id;
-        setTarget(tid);
+        try {
+          const tt = await api.post<TimetableSummary>("/timetables", { name: nameOverride ?? finalName, academic_year: year, term, ...scope });
+          tid = tt.id;
+          setTarget(tid);
+          setDupSuggestion(null);
+        } catch (e) {
+          if (e instanceof ApiError && e.code === "duplicate_name") {
+            setDupSuggestion(String(e.body.suggestion));
+            setStep(0);
+            return;
+          }
+          throw e;
+        }
       }
-      const r = await api.post<{ run_id: string }>(`/timetables/${tid}/generate`, { mode, time_limit_s: limit });
+      const r = await api.post<{ run_id: string }>(`/timetables/${tid}/generate`, { mode });
       setRunId(r.run_id);
       setEvents([]);
       setFinal(null);
@@ -120,9 +139,28 @@ export default function GeneratePage() {
             </Field>
             {target === "new" ? (
               <>
-                <Field label="Version name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Semester I – 2026" /></Field>
                 <div className="grid grid-cols-2 gap-4">
-                  <Field label="Programme" hint="Leave empty to schedule all programmes together (recommended — avoids cross-programme clashes).">
+                  <Field label="Academic year" hint="Format 2026-27">
+                    <Input value={year} maxLength={7} onChange={(e) => setYear(e.target.value)} placeholder="2026-27" />
+                  </Field>
+                  <Field label="Term" hint={term === "ODD" ? "Schedules Semesters I, III, V, VII, IX" : "Schedules Semesters II, IV, VI, VIII, X"}>
+                    <Select value={term} onChange={(e) => { setTerm(e.target.value as "ODD" | "EVEN"); setSemester(""); }}>
+                      <option value="ODD">Odd term (July – December)</option>
+                      <option value="EVEN">Even term (January – May)</option>
+                    </Select>
+                  </Field>
+                </div>
+                <Field label="Timetable name">
+                  <Input value={finalName} onChange={(e) => { setNameTouched(true); setName(e.target.value); setDupSuggestion(null); }} />
+                </Field>
+                {dupSuggestion && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 p-3 text-sm">
+                    <span className="flex-1">A timetable named <b>{finalName}</b> already exists. Use <b>{dupSuggestion}</b> instead, or type a different name.</span>
+                    <Button size="sm" onClick={() => { setNameTouched(true); setName(dupSuggestion); setDupSuggestion(null); }}>Use “{dupSuggestion}”</Button>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Programme" help="Leave “All programmes” to schedule everything together. This is recommended because programmes share faculty and rooms, and scheduling them together avoids clashes between them.">
                     <Select value={programmeId} onChange={(e) => { setProgrammeId(e.target.value); setSemester(""); }}>
                       <option value="">All programmes</option>
                       {programmes.data?.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
@@ -130,8 +168,10 @@ export default function GeneratePage() {
                   </Field>
                   <Field label="Semester">
                     <Select value={semester} onChange={(e) => setSemester(e.target.value)} disabled={!selectedProgramme}>
-                      <option value="">All semesters</option>
-                      {selectedProgramme && Array.from({ length: selectedProgramme.duration_semesters }, (_, i) => <option key={i} value={i + 1}>Semester {i + 1}</option>)}
+                      <option value="">All {term === "ODD" ? "odd" : "even"} semesters</option>
+                      {selectedProgramme && Array.from({ length: selectedProgramme.duration_semesters }, (_, i) => i + 1)
+                        .filter((n) => (term === "ODD" ? n % 2 === 1 : n % 2 === 0))
+                        .map((n) => <option key={n} value={n}>Semester {n}</option>)}
                     </Select>
                   </Field>
                 </div>
@@ -141,7 +181,7 @@ export default function GeneratePage() {
                 <TimetableStatusBadge status="DRAFT" /> Regenerating an existing draft keeps its locked sessions.
               </div>
             )}
-            <Field label="Generation mode">
+            <Field label="Generation mode" help="No time setting is needed: the engine finds a valid timetable within seconds, keeps improving it, and stops by itself as soon as it has proven it is the best possible one.">
               <div className="grid gap-2 sm:grid-cols-2">
                 {([["full", "Auto (recommended)", "Build the best timetable from scratch. Locked sessions stay."],
                    ["unlocked", "Keep current layout", "Regenerate unlocked sessions while moving as few as possible."]] as const).map(([v, t, d]) => (
@@ -152,10 +192,7 @@ export default function GeneratePage() {
                 ))}
               </div>
             </Field>
-            <Field label={`Time limit: ${limit} s`} hint="The engine stops at the limit and returns the best timetable found.">
-              <input type="range" min={10} max={120} step={5} value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="w-full accent-[var(--brand)]" />
-            </Field>
-            <div className="flex justify-end"><Button onClick={() => setStep(1)} icon={<ChevronRight className="size-4" />}>Next</Button></div>
+            <div className="flex justify-end"><Button onClick={() => setStep(1)} disabled={target === "new" && !/^20\d{2}-\d{2}$/.test(year)} icon={<ChevronRight className="size-4" />}>Next</Button></div>
           </div>
         )}
 
@@ -173,12 +210,12 @@ export default function GeneratePage() {
                   {readiness.data.ready ? <CheckCircle2 className="size-5" /> : <XCircle className="size-5" />}
                   {readiness.data.ready ? "All pre-flight checks passed. Ready to generate." : "Some inputs make a complete timetable impossible. Fix them first."}
                 </div>
-                <DiagnosticList items={readiness.data.diagnostics} empty={<p className="text-sm text-muted">No warnings.</p>} />
+                <DiagnosticList items={readiness.data.diagnostics} empty={<p className="text-sm text-muted">{readiness.data.ready ? "No warnings." : "Nothing to schedule for this selection."}</p>} />
               </>
             )}
             <div className="flex justify-between">
               <Button variant="secondary" icon={<ChevronLeft className="size-4" />} onClick={() => setStep(0)}>Back</Button>
-              <Button icon={<Sparkles className="size-4" />} disabled={!readiness.data?.counts.sessions} onClick={start}>
+              <Button icon={<Sparkles className="size-4" />} disabled={!readiness.data?.counts.sessions} onClick={() => void start()}>
                 {readiness.data?.ready ? "Generate" : "Generate anyway"}
               </Button>
             </div>

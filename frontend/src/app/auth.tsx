@@ -55,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe,
       logout,
       refresh,
-      can: (perm) => !!me && (me.permissions.includes("*") || me.permissions.includes(perm)),
+      can: (perm) => !!me && me.permissions.includes(perm),
       hasRole: (...roles) => !!me && roles.includes(me.role),
     }),
     [me, loading, logout, refresh],

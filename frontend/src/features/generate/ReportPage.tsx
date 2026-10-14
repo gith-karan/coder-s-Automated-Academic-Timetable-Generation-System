@@ -4,7 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, CalendarRange, CheckCircle2, ClipboardList, Download, Layers, RefreshCw, Timer, XCircle } from "lucide-react";
 import { api, downloadUrl } from "@/lib/api";
 import type { Run } from "@/lib/types";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { useTimeFormat } from "@/app/preferences";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, EmptyState, PageHeader, Progress, Skeleton, Tabs } from "@/components/ui/display";
 import { DataTable } from "@/components/ui/table";
@@ -14,6 +15,7 @@ export default function ReportPage() {
   const { runId } = useParams();
   const navigate = useNavigate();
   const [tab, setTab] = useState("summary");
+  const { tx, dt } = useTimeFormat();
   const { data: run } = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.get<Run>(`/runs/${runId}`),
@@ -35,7 +37,7 @@ export default function ReportPage() {
 
   return (
     <>
-      <PageHeader title="Generation Report" description={`Results and diagnostics · ${formatDateTime(run.finished_at ?? run.created_at)}`}
+      <PageHeader title="Generation Report" description={`Results and diagnostics · ${dt(run.finished_at ?? run.created_at)}`}
         actions={<>
           <RunStatusBadge status={run.status} />
           <Button variant="secondary" icon={<RefreshCw className="size-4" />} onClick={() => navigate("/generate")}>Regenerate</Button>
@@ -101,11 +103,11 @@ export default function ReportPage() {
             <DataTable rowKey={(r) => r.key} rows={run.unassigned}
               empty={<EmptyState icon={<CheckCircle2 />} title="Every session was scheduled" />}
               columns={[
-                { key: "s", header: "Session", cell: (r) => <span className="font-medium">{r.subject_code ?? r.key.split("|")[0]}</span> },
+                { key: "s", header: "Session", cell: (r) => <span className="font-medium">{r.subject_code ?? "—"}</span> },
                 { key: "a", header: "Class / batch", cell: (r) => r.audience ?? "—" },
                 { key: "f", header: "Faculty", cell: (r) => r.faculty?.join(", ") ?? "—", hideOnMobile: true },
                 { key: "l", header: "Length", cell: (r) => r.length ? `${r.length}p` : "—", hideOnMobile: true },
-                { key: "r", header: "Why it could not be placed", cell: (r) => <span className="text-xs text-muted">{r.reason ?? "Blocked by input problems listed under Diagnostics"}</span> },
+                { key: "r", header: "Why it could not be placed", cell: (r) => <span className="text-xs text-muted">{r.reason ? tx(r.reason) : "Blocked by input problems listed under Diagnostics"}</span> },
               ]} />
           )}
         </div>

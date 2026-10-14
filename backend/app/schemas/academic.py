@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
-from app.models.academic import ConstraintMode, Level, RoomKind, SubjectKind
+from app.models.academic import ConstraintMode, Level, RoomKind, RuleKind, SubjectKind
 from app.schemas.common import HHMM, Code, CommitmentIn, Day, Name, ReadModel, ShortText, StrictModel, TimeRangeIn
 
-Strength = Annotated[int, Field(ge=1, le=2000)]
+Strength = Annotated[int, Field(ge=1, le=500)]       # students in a class/batch
+Capacity = Annotated[int, Field(ge=1, le=1000)]      # seats in a room
 Semester = Annotated[int, Field(ge=1, le=12)]
 
 
@@ -25,8 +26,6 @@ class CalendarIn(StrictModel):
     day_start: HHMM
     day_end: HHMM
     period_minutes: Annotated[int, Field(ge=15, le=240)]
-    academic_year: Annotated[str, Field(max_length=16)] = "2026-27"
-    term_label: Annotated[str, Field(max_length=32)] = "Odd Semester"
     breaks: list[BreakIn] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
@@ -57,7 +56,7 @@ class RoomIn(StrictModel):
     name: Name
     kind: RoomKind
     lab_type_id: str | None = None
-    capacity: Strength
+    capacity: Capacity
     building: Annotated[str, Field(max_length=64)] | None = None
     is_active: bool = True
     unavailable: list[TimeRangeIn] = Field(default_factory=list, max_length=100)
@@ -74,7 +73,7 @@ class RoomUpdate(StrictModel):
     name: Name | None = None
     kind: RoomKind | None = None
     lab_type_id: str | None = None
-    capacity: Strength | None = None
+    capacity: Capacity | None = None
     building: Annotated[str, Field(max_length=64)] | None = None
     is_active: bool | None = None
     unavailable: list[TimeRangeIn] | None = Field(default=None, max_length=100)
@@ -189,6 +188,7 @@ class FacultyIn(StrictModel):
     max_periods_per_day: Annotated[int, Field(ge=1, le=16)] | None = None
     max_periods_per_week: Annotated[int, Field(ge=1, le=80)] | None = None
     availability: AvailabilityIn = Field(default_factory=AvailabilityIn)
+    programme_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class FacultyUpdate(StrictModel):
@@ -200,6 +200,7 @@ class FacultyUpdate(StrictModel):
     max_periods_per_day: Annotated[int, Field(ge=1, le=16)] | None = None
     max_periods_per_week: Annotated[int, Field(ge=1, le=80)] | None = None
     availability: AvailabilityIn | None = None
+    programme_ids: list[str] | None = Field(default=None, max_length=50)
 
 
 class FacultyOut(ReadModel):
@@ -212,12 +213,18 @@ class FacultyOut(ReadModel):
     max_periods_per_day: int | None
     max_periods_per_week: int | None
     availability: dict
+    programme_ids: list[str]
 
 
 # ---------------------------------------------------------------- subjects
+ShortName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16,
+                                             pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._\-/()&+]*$")]
+
+
 class SubjectIn(StrictModel):
     code: Code
     name: Name
+    short_name: ShortName
     programme_id: str
     semester: Semester
     kind: SubjectKind
@@ -244,6 +251,7 @@ class SubjectIn(StrictModel):
 class SubjectUpdate(StrictModel):
     code: Code | None = None
     name: Name | None = None
+    short_name: ShortName | None = None
     programme_id: str | None = None
     semester: Semester | None = None
     kind: SubjectKind | None = None
@@ -265,6 +273,7 @@ class SubjectOut(ReadModel):
     id: str
     code: str
     name: str
+    short_name: str
     programme_id: str
     semester: int
     kind: SubjectKind
@@ -311,3 +320,30 @@ class ConstraintOut(ReadModel):
     mode: ConstraintMode
     weight: int
     value: int | None
+
+
+class CustomRuleIn(StrictModel):
+    kind: RuleKind
+    mode: ConstraintMode = ConstraintMode.HARD
+    weight: Annotated[int, Field(ge=0, le=10)] = 5
+    enabled: bool = True
+    params: dict = Field(default_factory=dict)
+    note: ShortText | None = None
+
+
+class CustomRuleUpdate(StrictModel):
+    mode: ConstraintMode | None = None
+    weight: Annotated[int, Field(ge=0, le=10)] | None = None
+    enabled: bool | None = None
+    params: dict | None = None
+    note: ShortText | None = None
+
+
+class CustomRuleOut(ReadModel):
+    id: str
+    kind: RuleKind
+    mode: ConstraintMode
+    weight: int
+    enabled: bool
+    params: dict
+    note: str | None

@@ -72,7 +72,7 @@ def test_generate_edit_lock_publish(client, admin):
     blocked = next(c for c in opts["cells"] if c["status"] == "blocked")
     ok = next(c for c in opts["cells"] if c["status"] in ("ok", "warning") and not c.get("current"))
     r = admin.patch(f"/timetables/{tt['id']}/entries/{entry['id']}", {"day": blocked["day"], "start_period": blocked["period"]})
-    assert r.status_code == 409 and r.json()["violations"]
+    assert r.status_code == 409 and r.json()["reasons"] and "suggestions" in r.json()
     r = admin.patch(f"/timetables/{tt['id']}/entries/{entry['id']}", {"day": ok["day"], "start_period": ok["period"]})
     assert r.status_code == 200, r.text
 

@@ -13,7 +13,6 @@ class TimetableStatus(StrEnum):
     DRAFT = "DRAFT"
     IN_REVIEW = "IN_REVIEW"
     PUBLISHED = "PUBLISHED"
-    ARCHIVED = "ARCHIVED"
 
 
 class RunStatus(StrEnum):
@@ -33,6 +32,8 @@ class Timetable(IdMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[TimetableStatus] = mapped_column(Enum(TimetableStatus, native_enum=False, length=16),
                                                     default=TimetableStatus.DRAFT, index=True)
+    academic_year: Mapped[str | None] = mapped_column(String(16))
+    term: Mapped[str | None] = mapped_column(String(8))  # ODD (Sem I, III, …) | EVEN (Sem II, IV, …)
     # Scope: empty list = all programmes
     programme_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     semesters: Mapped[list[int]] = mapped_column(JSON, default=list)
@@ -47,6 +48,7 @@ class Timetable(IdMixin, TimestampMixin, Base):
     published_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     content_hash: Mapped[str | None] = mapped_column(String(64))  # sealed on publish
+    notice: Mapped[str | None] = mapped_column(String(300))  # e.g. "Unpublished: replaced by …"
     last_run_id: Mapped[str | None] = mapped_column(String(36))
 
     entries: Mapped[list["TimetableEntry"]] = relationship(

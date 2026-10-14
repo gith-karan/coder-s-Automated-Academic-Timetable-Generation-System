@@ -9,10 +9,16 @@ import { cn, DAYS_SHORT } from "@/lib/utils";
 import { Button, IconButton } from "@/components/ui/button";
 import { Card, PageHeader, Skeleton } from "@/components/ui/display";
 import { Field, Input } from "@/components/ui/form";
+import { useAuth } from "@/app/auth";
+import { HelpTip } from "@/components/ui/overlay";
+import { useTimeFormat } from "@/app/preferences";
 
 type Form = Omit<CalendarData, "grid">;
 
 export default function CalendarPage() {
+  const { can } = useAuth();
+  const { t } = useTimeFormat();
+  const canEdit = can("setup.edit");
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["calendar"], queryFn: () => api.get<CalendarData>("/calendar") });
   const [form, setForm] = useState<Form | null>(null);
@@ -39,16 +45,11 @@ export default function CalendarPage() {
   return (
     <>
       <PageHeader title="Academic Calendar" description="University working days, hours, period duration and scheduled breaks"
-        actions={<Button icon={<Save className="size-4" />} loading={save.isPending} onClick={() => save.mutate(form)} disabled={!!previewError}>Save changes</Button>} />
+        actions={canEdit ? <Button icon={<Save className="size-4" />} loading={save.isPending} onClick={() => save.mutate(form)} disabled={!!previewError}>Save changes</Button>
+          : <span className="rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-muted">View only</span>} />
       <div className="grid gap-5 lg:grid-cols-5">
-        <div className="space-y-5 lg:col-span-2">
-          <Card title="Term">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Academic year"><Input value={form.academic_year} onChange={(e) => set({ academic_year: e.target.value })} /></Field>
-              <Field label="Term"><Input value={form.term_label} onChange={(e) => set({ term_label: e.target.value })} /></Field>
-            </div>
-          </Card>
-          <Card title="Working days & hours">
+        <fieldset disabled={!canEdit} className="space-y-5 lg:col-span-2">
+          <Card title={<span className="inline-flex items-center gap-1.5">Working days & hours <HelpTip>These timings apply to every timetable. The academic year and the term (Odd: Semesters I, III, V… / Even: II, IV, VI…) are chosen for each timetable when you generate it.</HelpTip></span>}>
             <div className="mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Working days">
               {DAYS_SHORT.map((d, i) => {
                 const on = form.working_days.includes(i);
@@ -81,7 +82,7 @@ export default function CalendarPage() {
               {!form.breaks.length && <p className="text-sm text-muted">No breaks.</p>}
             </div>
           </Card>
-        </div>
+        </fieldset>
 
         <Card className="lg:col-span-3" title="Live preview" description="Exactly the periods the generator will use. Practicals never span a break.">
           {previewError ? <p className="rounded-lg bg-bad/10 p-3 text-sm text-bad">{previewError}</p> : preview && (
@@ -96,13 +97,13 @@ export default function CalendarPage() {
                   <div key={p.index}>
                     {i > 0 && arr[i - 1].end !== p.start && (
                       <div className="my-1.5 flex items-center gap-2 rounded-lg border border-dashed border-gold/60 bg-gold/10 px-3 py-1.5 text-xs text-[#8a6d22] dark:text-gold">
-                        <Coffee className="size-3.5" />{preview.breaks.find((b) => b.start >= arr[i - 1].end && b.end <= p.start)?.name ?? "Break"} · {arr[i - 1].end}–{p.start}
+                        <Coffee className="size-3.5" />{preview.breaks.find((b) => b.start >= arr[i - 1].end && b.end <= p.start)?.name ?? "Break"} · {t(arr[i - 1].end)}–{t(p.start)}
                       </div>
                     )}
                     <div className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm">
                       <Clock className="size-4 text-muted" />
                       <span className="w-20 font-medium">Period {p.index + 1}</span>
-                      <span className="tabular-nums text-muted">{p.start} – {p.end}</span>
+                      <span className="tabular-nums text-muted">{t(p.start)} – {t(p.end)}</span>
                     </div>
                   </div>
                 ))}

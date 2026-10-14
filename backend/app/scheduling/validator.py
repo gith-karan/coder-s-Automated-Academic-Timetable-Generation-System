@@ -50,6 +50,15 @@ def check_unit(problem: Problem, unit: SessionUnit, pl: Placement) -> list[Viola
         out.append(Violation("OUTSIDE_WORKING_HOURS", "HARD", msg, [unit.key]))
         return out
     cov = g.covered(pl.day, pl.period, unit.length)
+    blocked = problem.rules.group_blocked.get(unit.group_id)
+    if blocked and any(s in blocked for s in cov):
+        label = problem.rules.group_block_label.get(unit.group_id, "a blocked period")
+        out.append(Violation("CLASS_BLOCKED", "HARD", f"{unit.audience} is not available at {where} ({label})",
+                             [unit.key]))
+    win = problem.rules.subject_windows.get(unit.subject_id)
+    if win and not all(s in win.allowed for s in cov):
+        out.append(Violation("OUTSIDE_SUBJECT_WINDOW", "HARD" if win.hard else "SOFT",
+                             f"{unit.label} at {where} is outside its allowed time ({win.label})", [unit.key]))
     for fid in unit.faculty_ids:
         f = problem.faculty.get(fid)
         if f and not all(s in f.available for s in cov):
@@ -63,7 +72,10 @@ def check_unit(problem: Problem, unit: SessionUnit, pl: Placement) -> list[Viola
             out.append(Violation("ROOM_CAPACITY", "HARD",
                                  f"Room {room.code} seats {room.capacity} but {unit.audience} has {unit.strength} students",
                                  [unit.key]))
-        if not problem.room_suitable(unit, room) and room.capacity >= unit.strength:
+        if problem.room_reserved_against(unit, room):
+            out.append(Violation("ROOM_RESERVED", "HARD",
+                                 f"Room {room.code} is reserved for other programmes", [unit.key]))
+        elif not problem.room_suitable(unit, room) and room.capacity >= unit.strength:
             need = f"a {unit.lab_type or 'laboratory'}" if unit.room_kind == "LAB" else "a classroom"
             out.append(Violation("ROOM_TYPE", "HARD", f"{unit.label} needs {need}; {room.code} is not suitable",
                                  [unit.key]))
@@ -131,6 +143,30 @@ def validate(problem: Problem, placements: dict[str, Placement], *, require_comp
             if n > lim:
                 out.append(Violation("GROUP_DAILY_LIMIT", "HARD",
                                      f"{g.label} has {n} periods on {DAY_NAMES[d]} (limit {lim})"))
+
+    # Custom rule: maximum consecutive teaching periods
+    fac_slots: dict[tuple[str, int], set[int]] = defaultdict(set)
+    for key, pl in placements.items():
+        u = units.get(key)
+        if u:
+            for f in u.faculty_ids:
+                fac_slots[(f, pl.day)].update(range(pl.period, pl.period + u.length))
+    for (fid, d), ps in fac_slots.items():
+        rule = problem.rules.consecutive_for(fid)
+        if not rule:
+            continue
+        n, hard_rule, _ = rule
+        run = best = 0
+        for q in range(problem.grid.n_periods(d)):
+            if q in ps and (run == 0 or problem.grid.contiguous(d, q - 1, 2)):
+                run += 1
+            else:
+                run = 1 if q in ps else 0
+            best = max(best, run)
+        if best > n:
+            out.append(Violation("FACULTY_CONSECUTIVE", "HARD" if hard_rule else "SOFT",
+                                 f"{_who(problem, 'faculty', fid)} teaches {best} periods in a row on {DAY_NAMES[d]} "
+                                 f"(rule: at most {n})"))
 
     # H-7: completeness
     if require_complete:

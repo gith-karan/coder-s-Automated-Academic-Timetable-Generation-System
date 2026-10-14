@@ -41,6 +41,10 @@ def run_prechecks(problem: Problem) -> list[Diagnostic]:
     fac = problem.faculty
 
     out.extend(problem_warnings(problem))
+    for e in problem.scope_errors:
+        out.append(Diagnostic(e["code"], e.get("severity", "ERROR"), e["message"], fix=e.get("fix")))
+    if any(e.get("severity", "ERROR") == "ERROR" for e in problem.scope_errors):
+        return out
 
     if total_slots == 0:
         out.append(Diagnostic("NO_PERIODS", "ERROR",
@@ -113,6 +117,12 @@ def run_prechecks(problem: Problem) -> list[Diagnostic]:
             continue
 
         starts = problem.starts_for(u)
+        if not starts and (problem.rules.group_blocked.get(u.group_id) or u.subject_id in problem.rules.subject_windows):
+            out.append(Diagnostic("NO_TIME_WINDOW", "ERROR",
+                                  f"{what} {u.subject_code} ({u.audience}) has no possible period: the custom rules for "
+                                  f"this class/subject leave no time when its faculty is also available.",
+                                  [subj_ent], keys, {"page": "constraints"}))
+            continue
         if not starts:
             names = ", ".join(fac[f].name for f in known)
             if u.length > 1:
@@ -176,11 +186,12 @@ def run_prechecks(problem: Problem) -> list[Diagnostic]:
             atom_load[a] += u.length
     for g in problem.groups.values():
         worst = max((atom_load.get(a, 0) for a in g.atoms), default=0)
-        if worst > total_slots:
+        free = total_slots - len(problem.rules.group_blocked.get(g.id, ()))
+        if worst > free:
             out.append(Diagnostic("GROUP_OVERLOADED", "ERROR",
-                                  f"{g.label} needs {worst} teaching periods per week, but the calendar has only "
-                                  f"{total_slots}.", [{"type": "group", "id": g.id, "label": g.label}],
-                                  fix={"page": "calendar"}))
+                                  f"{g.label} needs {worst} teaching periods per week, but only {free} periods are "
+                                  f"available to it (calendar and custom rules).",
+                                  [{"type": "group", "id": g.id, "label": g.label}], fix={"page": "constraints"}))
         lim = problem.group_daily_limit(g.id)
         if lim and worst > lim * len(grid.days):
             out.append(Diagnostic("GROUP_DAILY_LIMIT", "ERROR",

@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+import os
+import threading
+
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -81,7 +84,40 @@ def record(db: Session, *, action: str, category: str, actor=None, outcome: str 
     db.flush()
     head.last_hash = row.hash
     head.last_seq = row.seq
+    db.info.setdefault("audit_pending", []).append({
+        "seq": row.seq, "at": row.at.isoformat(), "actor": row.actor_email, "role": row.actor_role,
+        "action": row.action, "category": row.category, "outcome": row.outcome, "entity": row.entity,
+        "entity_id": row.entity_id, "summary": row.summary, "ip": row.ip, "request_id": row.request_id,
+        "prev_hash": row.prev_hash, "hash": row.hash})
     return row
+
+
+# ---------------------------------------------------------------- secondary, append-only copy
+# Every committed audit event is also appended to a JSON-lines file outside the database, so the trail
+# survives even if the database is lost or replaced. In production this file is shipped to write-once
+# (WORM) storage / a SIEM. Rolled-back events are never written.
+_file_lock = threading.Lock()
+
+
+def _audit_file() -> str:
+    d = get_settings().log_dir
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "audit-trail.jsonl")
+
+
+@event.listens_for(Session, "after_commit")
+def _flush_audit_file(session: Session) -> None:
+    pending = session.info.pop("audit_pending", None)
+    if not pending:
+        return
+    lines = "".join(json.dumps(x, ensure_ascii=False, default=str) + "\n" for x in pending)
+    with _file_lock, open(_audit_file(), "a", encoding="utf-8") as fh:
+        fh.write(lines)
+
+
+@event.listens_for(Session, "after_rollback")
+def _drop_audit_pending(session: Session) -> None:
+    session.info.pop("audit_pending", None)
 
 
 def record_standalone(**kwargs) -> None:

@@ -22,8 +22,9 @@ const WHO_IS_NOTIFIED: Record<Role, string> = {
 };
 
 export default function UsersPage() {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const qc = useQueryClient();
+  const canManage = can("users.manage");
   const creatable = (me?.permissions ?? []).filter((p) => p.startsWith("create:")).map((p) => p.slice(7) as Role);
   const [q, setQ] = useState("");
   const [role, setRole] = useState("");
@@ -86,7 +87,7 @@ export default function UsersPage() {
             { key: "s", header: "Status", cell: (u) => !u.is_active ? <Badge>Deactivated</Badge> : u.must_change_password ? <Badge tone="warn">Invited</Badge> : <Badge tone="ok">Active</Badge>, hideOnMobile: true },
             { key: "b", header: "Added by", cell: (u) => <span className="text-xs text-muted">{u.created_by?.full_name ?? "System"}</span>, hideOnMobile: true },
             { key: "l", header: "Last sign-in", cell: (u) => <span className="text-xs text-muted">{timeAgo(u.last_login_at)}</span>, hideOnMobile: true },
-            { key: "a", header: <span className="sr-only">Actions</span>, className: "w-12", cell: (u) => u.id === me?.id ? null : (
+            { key: "a", header: <span className="sr-only">Actions</span>, className: "w-12", cell: (u) => u.id === me?.id || !canManage ? null : (
               <MenuRoot>
                 <MenuTrigger asChild><button aria-label={`Actions for ${u.full_name}`} className="grid size-8 place-items-center rounded-lg text-muted hover:bg-line/60"><MoreHorizontal className="size-4" /></button></MenuTrigger>
                 <MenuContent>

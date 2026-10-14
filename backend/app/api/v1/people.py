@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, current_principal, require_roles
+from app.api.deps import Principal, current_principal, require_perm
 from app.core.db import get_db, utcnow
-from app.core.roles import TEACHING, Role
+from app.core.roles import Role
 from app.models.audit import AuditLog
 from app.models.identity import Notification
 from app.schemas.identity import AuditOut, NotificationOut, UserCreatedOut, UserCreateIn, UserOut, UserUpdateIn
@@ -20,32 +20,35 @@ router = APIRouter()
 
 # ------------------------------------------------------------------ users
 users = APIRouter(prefix="/users", tags=["users"])
-_managers = require_roles(*TEACHING)  # faculty may add students only (enforced in the service)
+# Role ceilings (e.g. faculty may add students only) are enforced in the service on top of these.
+_view_users = require_perm("users.view")
+_create_users = require_perm("users.create")
+_manage_users = require_perm("users.manage")
 
 
 @users.get("")
 def list_users(q: str | None = Query(None, max_length=100), role: Role | None = None,
                page: int = Query(1, ge=1), size: int = Query(25, ge=1, le=100),
-               p: Principal = Depends(_managers), db: Session = Depends(get_db)):
+               p: Principal = Depends(_view_users), db: Session = Depends(get_db)):
     res = user_service.list_users(db, p, q=q, role=role, page=page, size=size)
     res["items"] = [UserOut.model_validate(u).model_dump(mode="json") for u in res["items"]]
     return res
 
 
 @users.post("", response_model=UserCreatedOut, status_code=201)
-def create_user(body: UserCreateIn, p: Principal = Depends(_managers), db: Session = Depends(get_db)):
+def create_user(body: UserCreateIn, p: Principal = Depends(_create_users), db: Session = Depends(get_db)):
     user, temp = user_service.create_user(db, p, body)
     out = UserCreatedOut.model_validate({**UserOut.model_validate(user).model_dump(), "temporary_password": temp})
     return out
 
 
 @users.patch("/{user_id}", response_model=UserOut)
-def update_user(user_id: str, body: UserUpdateIn, p: Principal = Depends(_managers), db: Session = Depends(get_db)):
+def update_user(user_id: str, body: UserUpdateIn, p: Principal = Depends(_manage_users), db: Session = Depends(get_db)):
     return user_service.update_user(db, p, user_id, body)
 
 
 @users.post("/{user_id}/reset-password")
-def reset_password(user_id: str, p: Principal = Depends(_managers), db: Session = Depends(get_db)):
+def reset_password(user_id: str, p: Principal = Depends(_manage_users), db: Session = Depends(get_db)):
     return {"temporary_password": user_service.reset_password(db, p, user_id)}
 
 
@@ -83,7 +86,7 @@ def mark_all_read(p: Principal = Depends(current_principal), db: Session = Depen
 
 # ------------------------------------------------------------------ audit (admin only, read-only)
 audit_router = APIRouter(prefix="/audit-logs", tags=["audit"])
-_admin = require_roles(Role.ADMIN)
+_admin = require_perm("audit.view")
 
 
 @audit_router.get("")

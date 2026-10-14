@@ -41,12 +41,12 @@ class Settings(BaseSettings):
     otp_max_attempts: int = 5
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"])
-    trusted_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "testserver"])
+    trusted_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
     max_body_bytes: int = 2 * 1024 * 1024
 
     # Solver guard rails (OWASP A06: solver must not become a DoS vector)
     solver_time_limit_s: int = 30
-    solver_max_time_limit_s: int = 120
+    solver_max_time_limit_s: int = 300  # upper bound for the admin-set safety cap
     solver_workers: int = 8
     max_concurrent_runs: int = 2
 

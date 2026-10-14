@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import type { Me, Preferences } from "@/lib/types";
+import { fmtTime, fmtTimesIn, formatDateTime } from "@/lib/utils";
 import { TooltipsEnabled } from "@/components/ui/overlay";
 import { useAuth } from "./auth";
 
@@ -10,6 +11,7 @@ export const DEFAULT_PREFS: Preferences = {
   compact_sidebar: false,
   show_tooltips: true,
   animations: true,
+  time_format: "12h",
 };
 
 const KEY = "nfsu.prefs";
@@ -83,4 +85,16 @@ export function usePrefs() {
   const ctx = useContext(PrefsCtx);
   if (!ctx) throw new Error("usePrefs outside PreferencesProvider");
   return ctx;
+}
+
+/** Time formatting that follows the user's 12h / 24h preference. */
+export function useTimeFormat() {
+  const { prefs } = usePrefs();
+  const f = prefs.time_format ?? "12h";
+  return {
+    format: f,
+    t: (hhmm: string) => fmtTime(hhmm, f),
+    tx: (text: string) => fmtTimesIn(text, f),
+    dt: (iso: string | null | undefined) => formatDateTime(iso, f),
+  };
 }

@@ -8,10 +8,14 @@ export interface FieldDef {
   name: string;
   label: string;
   type?: "text" | "number" | "email" | "select" | "multiselect" | "switch" | "textarea";
-  options?: { value: string; label: string }[];
+  /** Static options, or options computed from the current form values (cascading selects). */
+  options?: { value: string; label: string }[] | ((v: Values) => { value: string; label: string }[]);
+  emptyText?: string;
   required?: boolean;
   placeholder?: string;
   hint?: ReactNode;
+  /** Longer explanation, shown behind an ⓘ icon next to the label. */
+  help?: ReactNode;
   min?: number;
   max?: number;
   half?: boolean;
@@ -20,12 +24,13 @@ export interface FieldDef {
 }
 
 /** Config-driven form used by every resource drawer: same look, validation and error handling everywhere. */
-export function EntityForm({ id, fields, initial, onSubmit, serverErrors }: {
+export function EntityForm({ id, fields, initial, onSubmit, serverErrors, readOnly }: {
   id: string;
   fields: FieldDef[];
   initial: Values;
   onSubmit: (v: Values) => void;
   serverErrors?: Record<string, string>;
+  readOnly?: boolean;
 }) {
   const [values, setValues] = useState<Values>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -39,6 +44,7 @@ export function EntityForm({ id, fields, initial, onSubmit, serverErrors }: {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     const errs: Record<string, string> = {};
     for (const f of fields) {
       if (f.show && !f.show(values)) continue;
@@ -66,22 +72,24 @@ export function EntityForm({ id, fields, initial, onSubmit, serverErrors }: {
 
   return (
     <form id={id} onSubmit={submit} className="grid grid-cols-2 gap-4" noValidate>
+      <fieldset disabled={readOnly} className="contents">
       {fields.map((f) => {
         if (f.show && !f.show(values)) return null;
         const v = values[f.name];
         const err = errors[f.name];
+        const options = typeof f.options === "function" ? f.options(values) : f.options;
         const fid = `${id}-${f.name}`;
         return (
-          <Field key={f.name} label={f.type === "switch" ? undefined : f.label} htmlFor={fid} error={err} hint={f.hint}
+          <Field key={f.name} label={f.type === "switch" ? undefined : f.label} htmlFor={fid} error={err} hint={f.hint} help={f.help}
             required={f.required} className={cn(f.half ? "col-span-2 sm:col-span-1" : "col-span-2")}>
             {f.type === "select" ? (
               <Select id={fid} value={String(v ?? "")} invalid={!!err} onChange={(e) => set(f.name, e.target.value)}>
                 <option value="">{f.placeholder ?? "Select…"}</option>
-                {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                {options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </Select>
             ) : f.type === "multiselect" ? (
               <div className="flex flex-wrap gap-1.5 rounded-[10px] border border-line p-2">
-                {f.options?.map((o) => {
+                {options?.map((o) => {
                   const arr = (v as string[]) ?? [];
                   const on = arr.includes(o.value);
                   return (
@@ -93,7 +101,7 @@ export function EntityForm({ id, fields, initial, onSubmit, serverErrors }: {
                     </button>
                   );
                 })}
-                {!f.options?.length && <span className="text-xs text-muted">No options available</span>}
+                {!options?.length && <span className="text-xs text-muted">{f.emptyText ?? "No options available"}</span>}
               </div>
             ) : f.type === "switch" ? (
               <Switch checked={Boolean(v)} onCheckedChange={(c) => set(f.name, c)} label={f.label} />
@@ -106,6 +114,7 @@ export function EntityForm({ id, fields, initial, onSubmit, serverErrors }: {
           </Field>
         );
       })}
+      </fieldset>
     </form>
   );
 }

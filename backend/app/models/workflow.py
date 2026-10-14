@@ -56,7 +56,8 @@ class SystemSetting(Base):
 
 
 DEFAULT_SYSTEM_SETTINGS: dict[str, object] = {
-    "publish_requires_admin_approval": True,
-    "faculty_availability_requires_approval": True,
-    "solver_time_limit_s": 30,
+    # Safety cap only: the solver stops by itself as soon as it has proven the best timetable.
+    "solver_time_limit_s": 60,
+    # Role -> permission keys (see app.core.permissions). {} = defaults.
+    "role_permissions": {},
 }

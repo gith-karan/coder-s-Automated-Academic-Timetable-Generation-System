@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Ban, Check, Star } from "lucide-react";
 import type { Availability, Grid, TimeRange } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useTimeFormat } from "@/app/preferences";
 
 export type SlotState = "available" | "unavailable" | "preferred" | "commitment";
 type Key = `${number}:${number}`;
@@ -65,6 +66,7 @@ export function SlotPainter({ grid, value, onChange, brushes = ["available", "pr
   grid: Grid; value: Map<Key, SlotState>; onChange: (m: Map<Key, SlotState>) => void;
   brushes?: Exclude<SlotState, "commitment">[]; readOnly?: boolean;
 }) {
+  const { t } = useTimeFormat();
   const [brush, setBrush] = useState<Exclude<SlotState, "commitment">>(brushes[brushes.length - 1]);
   const painting = useRef(false);
   useEffect(() => {
@@ -92,6 +94,16 @@ export function SlotPainter({ grid, value, onChange, brushes = ["available", "pr
 
   return (
     <div className="space-y-3">
+      {readOnly && (
+        <p className="flex flex-wrap gap-3 text-xs text-muted">
+          {/* Only colours that actually occur are explained. */}
+          <span className="text-ok">■ Available</span>
+          {counts.preferred > 0 && <span className="text-[#8a6d22] dark:text-gold">■ Preferred</span>}
+          {counts.unavailable > 0 && <span className="text-bad">■ Unavailable</span>}
+          {counts.commitment > 0 && <span className="text-info">■ Fixed commitment</span>}
+          <span className="ml-auto">{counts.available + counts.preferred} free · {counts.unavailable + counts.commitment} blocked</span>
+        </p>
+      )}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted">Brush:</span>
@@ -117,7 +129,7 @@ export function SlotPainter({ grid, value, onChange, brushes = ["available", "pr
           {grid.days.map((d) => <div key={d.day} className="pb-1 text-center text-xs font-semibold text-muted">{d.short}</div>)}
           {Array.from({ length: maxP }).map((_, p) => (
             <div key={p} className="contents">
-              <div className="flex items-center text-[11px] tabular-nums text-muted">{labels[p] ? `${labels[p].start}–${labels[p].end}` : `P${p + 1}`}</div>
+              <div className="flex items-center text-[11px] tabular-nums text-muted">{labels[p] ? `${t(labels[p].start)}–${t(labels[p].end)}` : `P${p + 1}`}</div>
               {grid.days.map((d) => {
                 const st = value.get(k(d.day, p));
                 if (!st) return <div key={d.day} />;
@@ -128,7 +140,7 @@ export function SlotPainter({ grid, value, onChange, brushes = ["available", "pr
                     onPointerDown={(e) => { e.preventDefault(); painting.current = true; paint(d.day, p); }}
                     onPointerEnter={() => painting.current && paint(d.day, p)}
                     onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), paint(d.day, p))}
-                    className={cn("grid h-9 place-items-center rounded-md border text-xs transition-colors", STYLE[st], !readOnly && "hover:brightness-95")}>
+                    className={cn("grid h-9 place-items-center rounded-md border text-xs transition-colors", STYLE[st], !readOnly ? "hover:brightness-95" : "cursor-default")}>
                     <I className="size-3.5" />
                   </button>
                 );
@@ -137,7 +149,7 @@ export function SlotPainter({ grid, value, onChange, brushes = ["available", "pr
           ))}
         </div>
       </div>
-      <p className="text-[11px] text-muted">Tip: click and drag across cells to paint several periods at once. Blue cells are fixed commitments.</p>
+      {!readOnly && <p className="text-[11px] text-muted">Tip: pick a brush, then click and drag across cells to paint several periods at once.{counts.commitment > 0 && " Blue cells are fixed commitments and cannot be painted over."}</p>}
     </div>
   );
 }

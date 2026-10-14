@@ -20,9 +20,9 @@ const KIND = {
 const STATUS_TONE = { PENDING: "warn", APPROVED: "ok", REJECTED: "bad", CANCELLED: "neutral" } as const;
 
 export default function RequestsPage() {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const qc = useQueryClient();
-  const reviewer = me?.role === "ADMIN" || me?.role === "COORDINATOR";
+  const reviewer = can("requests.review") || can("timetable.publish");
   const [tab, setTab] = useState(reviewer ? "PENDING" : "mine");
   const { data, isLoading } = useQuery({
     queryKey: ["requests", tab],
@@ -55,8 +55,8 @@ export default function RequestsPage() {
             <ul className="space-y-3">
               {data.map((r) => {
                 const K = KIND[r.kind];
-                const canDecide = reviewer && r.status === "PENDING" && r.requested_by?.id !== me?.id &&
-                  (r.reviewer_role !== "ADMIN" || me?.role === "ADMIN");
+                const canDecide = r.status === "PENDING" && r.requested_by?.id !== me?.id &&
+                  can(r.kind === "TIMETABLE_PUBLISH" ? "timetable.publish" : "requests.review");
                 const to = r.payload.to as number[] | undefined;
                 const from = r.payload.from as number[] | undefined;
                 return (
@@ -70,7 +70,7 @@ export default function RequestsPage() {
                           <Badge>{K.label}</Badge>
                         </div>
                         <p className="mt-0.5 text-xs text-muted">
-                          {r.requested_by?.name} ({r.requested_by && ROLE_LABEL[r.requested_by.role]}) · {timeAgo(r.created_at)} · needs {ROLE_LABEL[r.reviewer_role]} approval
+                          {r.requested_by?.name} ({r.requested_by && ROLE_LABEL[r.requested_by.role]}) · {timeAgo(r.created_at)} · needs approval from {r.kind === "TIMETABLE_PUBLISH" ? "someone allowed to publish" : "a reviewer of a higher role"}
                         </p>
                         {r.reason && <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-sm">“{r.reason}”</p>}
                         {r.kind === "SESSION_MOVE" && from && to && (

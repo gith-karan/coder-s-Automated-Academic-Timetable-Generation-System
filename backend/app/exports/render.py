@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+from xml.sax.saxutils import escape
 from datetime import date, datetime, timedelta
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -14,7 +15,7 @@ def safe_cell(v: str) -> str:
 
 
 def cell_text(e: dict) -> str:
-    parts = [e["subject"]["code"]]
+    parts = [f'{e["subject"].get("short_name") or e["subject"]["code"]} · {e["subject"]["code"]}']
     if e.get("batch"):
         parts[0] += f" ({e['batch']['name']})"
     if e.get("room"):
@@ -107,10 +108,10 @@ def to_pdf(sheets: list[dict], title: str, subtitle: str) -> bytes:
     story = []
     for i, sh in enumerate(sheets):
         story.append(Paragraph("<font color='#7A1F3D'><b>National Forensic Sciences University</b></font>", styles["Title"]))
-        story.append(Paragraph(f"{title} — <b>{sh['title']}</b>", styles["Heading3"]))
-        story.append(Paragraph(subtitle, styles["Normal"]))
+        story.append(Paragraph(f"{escape(title)} — <b>{escape(sh['title'])}</b>", styles["Heading3"]))
+        story.append(Paragraph(escape(subtitle), styles["Normal"]))
         story.append(Spacer(1, 4 * mm))
-        data = [sh["header"]] + [[r[0]] + [Paragraph(c.replace("\n", "<br/>").replace("&", "&amp;"), cell_style)
+        data = [sh["header"]] + [[r[0]] + [Paragraph(escape(c).replace("\n", "<br/>"), cell_style)
                                            for c in r[1:]] for r in sh["rows"]]
         ncols = len(sh["header"])
         width = doc.width

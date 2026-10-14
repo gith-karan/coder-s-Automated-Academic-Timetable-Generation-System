@@ -1,10 +1,9 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, useLocation } from "react-router-dom";
 import { Spinner } from "@/components/ui/display";
-import type { Role } from "@/lib/types";
 import { useAuth } from "./auth";
 import { AppLayout } from "./Layout";
-import { NAV } from "./nav";
+import { allowed, NAV } from "./nav";
 
 const LoginPage = lazy(() => import("@/features/auth/LoginPage"));
 const ChangePasswordGate = lazy(() => import("@/features/auth/ChangePasswordGate"));
@@ -43,16 +42,16 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Route-level RBAC mirrors the navigation config (the server enforces it independently). */
-function Guard({ path, roles, children }: { path?: string; roles?: Role[]; children: ReactNode }) {
+/** Route-level access mirrors the navigation config (the server enforces it independently). */
+function Guard({ path, children }: { path?: string; children: ReactNode }) {
   const { me } = useAuth();
-  const allowed = roles ?? NAV.find((n) => n.to === path)?.roles;
-  if (allowed && me && !allowed.includes(me.role)) return <Navigate to="/" replace />;
+  const item = NAV.find((n) => n.to === path);
+  if (item && !allowed(item, me)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
-const page = (el: ReactNode, path?: string, roles?: Role[]) => (
-  <Guard path={path} roles={roles}>
+const page = (el: ReactNode, path?: string) => (
+  <Guard path={path}>
     <Suspense fallback={<FullScreenLoader />}>{el}</Suspense>
   </Guard>
 );

@@ -6,10 +6,13 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.academic import Break, CalendarSettings, Faculty, FixedSession, Room, StudentGroup, Subject, SubjectKind
+from app.models.academic import (
+    Break, CalendarSettings, ConstraintMode, CustomRule, Faculty, FixedSession, Room, RuleKind, StudentGroup, Subject,
+    SubjectKind,
+)
 from app.models.timetable import Timetable, TimetableEntry, TimetableStatus
 from app.scheduling.domain import (
-    CLASSROOM, LAB, FacultyInfo, GroupInfo, Pin, Placement, Problem, RoomInfo, SessionUnit,
+    CLASSROOM, LAB, FacultyInfo, GroupInfo, Pin, Placement, Problem, RoomInfo, Rules, SessionUnit, SubjectWindow,
 )
 from app.scheduling.timegrid import BreakSpec, Slot, TimeGrid, TimeRange, to_minutes
 from app.services import constraints
@@ -49,10 +52,46 @@ def session_key(subject_id: str, group_id: str, batch_id: str | None, n: int) ->
     return f"{subject_id}|{group_id}|{batch_id or '-'}|{n}"
 
 
+def term_semesters(term: str | None, semesters: list[int] | None) -> list[int] | None:
+    """ODD term = semesters I, III, V…; EVEN term = II, IV, VI… (explicit semesters win)."""
+    if semesters:
+        return semesters
+    if term == "ODD":
+        return [1, 3, 5, 7, 9, 11]
+    if term == "EVEN":
+        return [2, 4, 6, 8, 10, 12]
+    return None
+
+
+def load_rules(db: Session, grid: TimeGrid) -> Rules:
+    rules = Rules()
+    for r in db.execute(select(CustomRule).where(CustomRule.enabled.is_(True))).scalars():
+        prm = r.params or {}
+        hard = r.mode == ConstraintMode.HARD
+        if r.kind == RuleKind.CLASS_BLOCK:
+            gid = prm.get("group_id")
+            slots = grid.slots_touching(_ranges(prm.get("ranges")))
+            rules.group_blocked[gid] = rules.group_blocked.get(gid, frozenset()) | frozenset(slots)
+            label = prm.get("label") or "blocked by a rule"
+            prev = rules.group_block_label.get(gid)
+            rules.group_block_label[gid] = f"{prev}; {label}" if prev and label not in prev else label
+        elif r.kind == RuleKind.SUBJECT_WINDOW:
+            days = prm.get("days") or grid.days
+            ranges = [TimeRange(d, to_minutes(prm.get("start", "00:00")), to_minutes(prm.get("end", "23:59"))) for d in days]
+            rules.subject_windows[prm.get("subject_id")] = SubjectWindow(
+                frozenset(grid.slots_within(ranges)), hard, r.weight, r.note or "custom time window")
+        elif r.kind == RuleKind.FACULTY_MAX_CONSECUTIVE:
+            rules.max_consecutive[prm.get("faculty_id") or "*"] = (int(prm.get("max", 3)), hard, r.weight)
+        elif r.kind == RuleKind.ROOM_RESERVED:
+            rules.room_programmes[prm.get("room_id")] = frozenset(prm.get("programme_ids") or [])
+    return rules
+
+
 def build_problem(db: Session, *, programme_ids: list[str] | None = None, semesters: list[int] | None = None,
-                  timetable: Timetable | None = None, keep_locked: bool = True) -> Problem:
+                  timetable: Timetable | None = None, keep_locked: bool = True, term: str | None = None) -> Problem:
     grid = load_grid(db)
     options = constraints.to_options(db)
+    semesters = term_semesters(term, semesters)
 
     gq = select(StudentGroup)
     if programme_ids:
@@ -94,7 +133,7 @@ def build_problem(db: Session, *, programme_ids: list[str] | None = None, semest
     for g in groups_db:
         atoms = tuple(b.id for b in g.batches) or (g.id,)
         groups[g.id] = GroupInfo(g.id, g.label, g.strength, atoms, {b.id: b.name for b in g.batches},
-                                 g.max_periods_per_day, g.home_room_id)
+                                 g.max_periods_per_day, g.home_room_id, g.programme_id)
         by_prog_sem[(g.programme_id, g.semester)].append(g)
         if g.batches and sum(b.strength for b in g.batches) != g.strength:
             warnings.append({"code": "BATCH_STRENGTH_MISMATCH",
@@ -134,6 +173,8 @@ def build_problem(db: Session, *, programme_ids: list[str] | None = None, semest
                                                  g.id, bid, label, strength, s.consecutive_periods, fids, atoms, LAB,
                                                  s.lab_type.name if s.lab_type else None, n))
 
+    scope_errors = _scope_errors(db, groups_db, units, programme_ids, semesters, term)
+
     unit_keys = {u.key for u in units}
     pins: dict[str, Pin] = {}
     previous: dict[str, Placement] = {}
@@ -155,4 +196,60 @@ def build_problem(db: Session, *, programme_ids: list[str] | None = None, semest
         if key in unit_keys:
             pins[key] = Pin(key, fs.day, fs.start_period, fs.room_id, "fixed")
 
-    return Problem(grid, rooms, faculty, groups, units, pins, previous, options, warnings)
+    problem = Problem(grid, rooms, faculty, groups, units, pins, previous, options, warnings, load_rules(db, grid))
+    problem.scope_errors = scope_errors
+    return problem
+
+
+ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"]
+
+
+def _scope_errors(db: Session, groups_db: list, units: list, programme_ids, semesters, term) -> list[dict]:
+    """Plain-English reasons why the chosen scope has nothing to schedule."""
+    from app.models.academic import Programme
+
+    out: list[dict] = []
+    progs = list(db.execute(select(Programme)).unique().scalars())
+    in_scope = [p for p in progs if not programme_ids or p.id in programme_ids]
+    which = f"{'the ' + term.lower() + ' term' if term else 'this selection'}"
+    sem_txt = ", ".join(ROMAN[s] if s < len(ROMAN) else str(s) for s in (semesters or [])[:6])
+    if not progs:
+        out.append({"code": "NO_PROGRAMMES", "message": "No programmes exist yet. Add programmes and their classes first.",
+                    "fix": {"page": "programmes"}})
+        return out
+    if not groups_db:
+        have = []
+        for p in in_scope:
+            sems = sorted({g.semester for g in p.groups})
+            have.append(f"{p.code}: " + (", ".join(f"Sem {ROMAN[s] if s < len(ROMAN) else s}" for s in sems) if sems else "no classes"))
+        out.append({"code": "NO_CLASSES_IN_SCOPE",
+                    "message": f"No class sections match {which}" + (f" (semesters {sem_txt})" if sem_txt else "") +
+                               ". Existing classes — " + "; ".join(have) +
+                               ". Add a class under Programmes → Class sections, or choose the other term.",
+                    "fix": {"page": "programmes"}})
+        return out
+    subj_q = select(Subject)
+    if programme_ids:
+        subj_q = subj_q.where(Subject.programme_id.in_(programme_ids))
+    subjects = list(db.execute(subj_q).unique().scalars())
+    empty = []
+    for g in groups_db:
+        if not any(s.programme_id == g.programme_id and s.semester == g.semester for s in subjects):
+            empty.append(g.label)
+    if not units:
+        out.append({"code": "NO_SUBJECTS_FOR_CLASSES",
+                    "message": "There is nothing to schedule: no subjects are defined for " + ", ".join(empty[:6]) +
+                               ". Add subjects for these programmes and semesters under Subjects.",
+                    "fix": {"page": "subjects"}})
+    elif empty:
+        out.append({"code": "CLASS_WITHOUT_SUBJECTS", "severity": "WARNING",
+                    "message": f"{', '.join(empty[:6])} {'has' if len(empty) == 1 else 'have'} no subjects, so "
+                               f"{'it' if len(empty) == 1 else 'they'} will get an empty timetable.",
+                    "fix": {"page": "subjects"}})
+    if not db.execute(select(Faculty.id)).first():
+        out.append({"code": "NO_FACULTY_AT_ALL", "message": "No faculty members exist yet. Add faculty first.",
+                    "fix": {"page": "faculty"}})
+    if not db.execute(select(Room.id).where(Room.is_active.is_(True))).first():
+        out.append({"code": "NO_ROOMS_AT_ALL", "message": "No active classrooms or labs exist. Add rooms first.",
+                    "fix": {"page": "rooms"}})
+    return out

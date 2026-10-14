@@ -5,7 +5,7 @@ import hashlib
 import json
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, bad_request, conflict, not_found
@@ -19,6 +19,21 @@ from app.scheduling.validator import Violation, hard, validate
 from app.services.problem_builder import build_problem, load_grid
 
 
+def name_taken(db: Session, name: str) -> bool:
+    return db.execute(select(Timetable.id).where(func.lower(Timetable.name) == name.strip().lower())).first() is not None
+
+
+def unique_name(db: Session, name: str) -> str:
+    """'SCSDF Odd Semester 2026-27' -> 'SCSDF Odd Semester 2026-27 (2)', (3)… like a file manager."""
+    import re
+
+    base = re.sub(r"\s\(\d+\)$", "", name.strip())
+    n = 2
+    while name_taken(db, f"{base} ({n})"):
+        n += 1
+    return f"{base} ({n})" if name_taken(db, name) else name
+
+
 def get_timetable(db: Session, tid: str) -> Timetable:
     tt = db.get(Timetable, tid)
     if tt is None:
@@ -28,7 +43,7 @@ def get_timetable(db: Session, tid: str) -> Timetable:
 
 def problem_for(db: Session, tt: Timetable, *, keep_locked: bool = True) -> Problem:
     return build_problem(db, programme_ids=tt.programme_ids or None, semesters=tt.semesters or None,
-                         timetable=tt, keep_locked=keep_locked)
+                         timetable=tt, keep_locked=keep_locked, term=tt.term)
 
 
 def placements_of(tt: Timetable) -> dict[str, Placement]:
@@ -80,6 +95,15 @@ def _lookup(db: Session, tt: Timetable) -> dict:
     return {"subjects": subjects, "groups": groups, "faculty": faculty, "rooms": rooms}
 
 
+def directory(db: Session, tt: Timetable) -> dict:
+    lk = _lookup(db, tt)
+    groups = sorted(({"id": g.id, "label": g.label, "programme_id": g.programme_id} for g in lk["groups"].values()),
+                    key=lambda x: x["label"])
+    faculty = sorted(({"id": f.id, "label": f"{f.name} ({f.code})"} for f in lk["faculty"].values()), key=lambda x: x["label"])
+    rooms = sorted(({"id": r.id, "label": f"{r.code} — {r.name}"} for r in lk["rooms"].values()), key=lambda x: x["label"])
+    return {"group": groups, "faculty": faculty, "room": rooms}
+
+
 def entry_dto(e: TimetableEntry, lk: dict, subject_colors: dict[str, int]) -> dict:
     s = lk["subjects"].get(e.subject_id)
     g = lk["groups"].get(e.group_id)
@@ -89,6 +113,7 @@ def entry_dto(e: TimetableEntry, lk: dict, subject_colors: dict[str, int]) -> di
         "id": e.id, "session_key": e.session_key, "day": e.day, "start_period": e.start_period, "length": e.length,
         "locked": e.locked,
         "subject": {"id": e.subject_id, "code": s.code if s else "?", "name": s.name if s else "?",
+                    "short_name": (s.short_name or s.code) if s else "?",
                     "kind": s.kind.value if s else "THEORY"},
         "group": {"id": e.group_id, "label": g.label if g else "?",
                   "programme_id": g.programme_id if g else None, "semester": g.semester if g else None},
@@ -131,6 +156,7 @@ def timetable_summary(tt: Timetable) -> dict:
             "created_at": tt.created_at.isoformat() if tt.created_at else None,
             "updated_at": tt.updated_at.isoformat() if tt.updated_at else None,
             "submitted_at": tt.submitted_at.isoformat() if tt.submitted_at else None,
+            "academic_year": tt.academic_year, "term": tt.term, "notice": tt.notice,
             "published_at": tt.published_at.isoformat() if tt.published_at else None,
             "review_comment": tt.review_comment, "parent_id": tt.parent_id, "last_run_id": tt.last_run_id}
 
@@ -153,6 +179,113 @@ def check_move(problem: Problem, placements: dict[str, Placement], key: str, day
     return [v for v in hard(validate(problem, trial, require_complete=False)) if key in v.keys or not v.keys]
 
 
+def _when(problem: Problem, day: int, period: int, length: int) -> str:
+    g = problem.grid
+    a, b = g.period(day, period), g.period(day, min(period + length - 1, g.n_periods(day) - 1))
+    return f"{DAY_SHORT[day]} {fmt(a.start)}–{fmt(b.end)}" if a and b else f"{DAY_SHORT[day]} P{period + 1}"
+
+
+def _describe(problem: Problem, placements: dict[str, Placement], key: str) -> str:
+    """e.g. 'MSCS26-PC-103-L (AICS — 2-hour lab) with Dr. Neha Gahlan in BL 302, Wed 11:30–13:30'."""
+    u = problem.unit_by_key[key]
+    pl = placements.get(key)
+    names = ", ".join(problem.faculty[f].name for f in u.faculty_ids if f in problem.faculty)
+    room = problem.rooms[pl.room_id].code if pl and pl.room_id in problem.rooms else "no room"
+    when = _when(problem, pl.day, pl.period, u.length) if pl else ""
+    return f"{u.subject_code} ({u.subject_name}) with {names} in {room}, {when}"
+
+
+def explain_slot(problem: Problem, placements: dict[str, Placement], key: str, day: int, period: int,
+                 room_id: str | None = None) -> tuple[list[str], list, list[str]]:
+    """Why a session cannot go to (day, period), in plain English naming the clashing subject, teacher,
+    class and room. Returns (blocking reasons, free suitable rooms, soft notes)."""
+    unit = problem.unit_by_key[key]
+    g = problem.grid
+    when = _when(problem, day, period, unit.length)
+    reasons: list[str] = []
+    if not g.contiguous(day, period, unit.length):
+        if unit.length > 1:
+            return [f"{unit.subject_code} needs {unit.length} back-to-back periods, but starting {when} it would run "
+                    "into a break or past the end of the day."], [], []
+        return [f"{when} is outside teaching hours."], [], []
+    occ = build_occupancy(problem, placements, exclude=key)
+    cov = g.covered(day, period, unit.length)
+    blocked = problem.rules.group_blocked.get(unit.group_id)
+    if blocked and any(c in blocked for c in cov):
+        label = problem.rules.group_block_label.get(unit.group_id, "custom rule")
+        reasons.append(f"{unit.audience} is not available at {when} ({label}).")
+    win = problem.rules.subject_windows.get(unit.subject_id)
+    if win and win.hard and not all(c in win.allowed for c in cov):
+        reasons.append(f"{unit.subject_code} may only be scheduled within its allowed time ({win.label}).")
+    pin = problem.pins.get(key)
+    if pin and pin.reason == "fixed" and (pin.day, pin.period) != (day, period):
+        reasons.append(f"{unit.subject_code} is a fixed session at {_when(problem, pin.day, pin.period, unit.length)}.")
+    for fid in unit.faculty_ids:
+        f = problem.faculty.get(fid)
+        if not f:
+            continue
+        if not all(c in f.available for c in cov):
+            reasons.append(f"{f.name} is not available at {when} (availability or a fixed commitment).")
+        for k in sorted({k for c in cov for k in occ.get(("faculty", fid, *c), [])}):
+            reasons.append(f"{f.name} is already teaching {_describe(problem, placements, k)}.")
+        lim = problem.faculty_daily_limit(fid)
+        if lim:
+            today = sum(problem.unit_by_key[k].length for k, pl in placements.items()
+                        if k != key and k in problem.unit_by_key and pl.day == day
+                        and fid in problem.unit_by_key[k].faculty_ids)
+            if today + unit.length > lim:
+                reasons.append(f"{f.name} already teaches {today} period(s) that day; the daily limit is {lim}.")
+    seen: set[str] = set()
+    for a in unit.atoms:
+        for k in sorted({k for c in cov for k in occ.get(("atom", a, *c), [])}):
+            if k not in seen:
+                seen.add(k)
+                reasons.append(f"{problem.unit_by_key[k].audience} already has {_describe(problem, placements, k)}.")
+    rooms = problem.rooms_for(unit)
+    free = [r for r in rooms if problem.room_free(r, day, period, unit.length)
+            and not any(occ.get(("room", r.id, *c)) for c in cov)]
+    if room_id:
+        r = problem.rooms.get(room_id)
+        busy = sorted({k for c in cov for k in occ.get(("room", room_id, *c), [])})
+        if r and busy:
+            reasons.append(f"Room {r.code} is already used by {_describe(problem, placements, busy[0])}.")
+        elif r and r not in free:
+            if problem.room_reserved_against(unit, r):
+                reasons.append(f"Room {r.code} is reserved for other programmes.")
+            elif r.capacity < unit.strength:
+                reasons.append(f"Room {r.code} seats {r.capacity}, but {unit.audience} has {unit.strength} students.")
+            elif not problem.room_free(r, day, period, unit.length):
+                reasons.append(f"Room {r.code} is blocked at {when}.")
+            else:
+                reasons.append(f"Room {r.code} is not the right type of room for {unit.subject_code}.")
+    elif not free:
+        need = f"a {unit.lab_type or 'lab'}" if unit.room_kind == "LAB" else "a classroom"
+        reasons.append(f"No suitable room is free at {when} ({need} for {unit.strength} students).")
+    soft: list[str] = []
+    if not reasons:
+        for fid in unit.faculty_ids:
+            f = problem.faculty.get(fid)
+            if f and f.preferred and not all(c in f.preferred for c in cov):
+                soft.append(f"Outside the preferred teaching time of {f.name}.")
+        if win and not win.hard and not all(c in win.allowed for c in cov):
+            soft.append(f"Outside the preferred time of {unit.subject_code} ({win.label}).")
+    return reasons, free, soft
+
+
+def _suggestions(problem: Problem, placements: dict[str, Placement], key: str, near: tuple[int, int],
+                 limit: int = 3) -> list[dict]:
+    unit = problem.unit_by_key[key]
+    out = []
+    for d in problem.grid.days:
+        for p in range(problem.grid.n_periods(d)):
+            r, free, _ = explain_slot(problem, placements, key, d, p)
+            if not r and free:
+                out.append({"day": d, "period": p, "label": _when(problem, d, p, unit.length), "room": free[0].code,
+                            "_dist": abs(d - near[0]) * 10 + abs(p - near[1])})
+    out.sort(key=lambda x: x["_dist"])
+    return [{k: v for k, v in x.items() if k != "_dist"} for x in out[:limit]]
+
+
 def move_entry(db: Session, tt: Timetable, entry_id: str, *, day: int, start_period: int, room_id: str | None,
                expected_version: int | None) -> tuple[TimetableEntry, list[Violation]]:
     ensure_editable(tt)
@@ -162,17 +295,20 @@ def move_entry(db: Session, tt: Timetable, entry_id: str, *, day: int, start_per
     if e.locked:
         raise conflict("This session is locked. Unlock it before moving.")
     problem = problem_for(db, tt)
+    unit = problem.unit_by_key.get(e.session_key)
+    if unit is None:
+        raise conflict("This session no longer matches the teaching requirements; regenerate the timetable.")
     placements = placements_of(tt)
-    target_room = room_id or e.room_id
-    if target_room is None:
-        opts = move_options(db, tt, entry_id, problem=problem)
-        cell = next((c for c in opts["cells"] if c["day"] == day and c["period"] == start_period), None)
-        target_room = cell["best_room_id"] if cell else None
-        if target_room is None:
-            raise conflict("No suitable room is free at that time.", violations=[])
-    violations = check_move(problem, placements, e.session_key, day, start_period, target_room)
-    if violations:
-        raise AppError(409, "conflict", violations[0].message, extra={"violations": [v.to_dict() for v in violations]})
+    reasons, free, _ = explain_slot(problem, placements, e.session_key, day, start_period, room_id)
+    target_room = room_id or (e.room_id if any(r.id == e.room_id for r in free) else (free[0].id if free else None))
+    violations = [] if reasons or target_room is None else check_move(
+        problem, placements, e.session_key, day, start_period, target_room)
+    if reasons or violations or target_room is None:
+        msgs = reasons or [v.message for v in violations] or ["No suitable room is free at that time."]
+        raise AppError(409, "conflict",
+                       f"{unit.subject_code} cannot move to {_when(problem, day, start_period, unit.length)}",
+                       extra={"reasons": msgs, "violations": [v.to_dict() for v in violations],
+                              "suggestions": _suggestions(problem, placements, e.session_key, (day, start_period))})
     e.day, e.start_period, e.room_id = day, start_period, target_room
     placements[e.session_key] = Placement(e.session_key, day, start_period, target_room)
     tt.is_complete = not hard(validate(problem, placements))
@@ -182,61 +318,23 @@ def move_entry(db: Session, tt: Timetable, entry_id: str, *, day: int, start_per
 
 
 def move_options(db: Session, tt: Timetable, entry_id: str, *, problem: Problem | None = None) -> dict:
-    """Feasibility heatmap for dragging one session: every (day, period) cell with status and reason."""
+    """Feasibility heatmap for dragging one session: every (day, period) cell with status and reasons."""
     e = _entry(tt, entry_id)
     problem = problem or problem_for(db, tt)
     unit = problem.unit_by_key.get(e.session_key)
     if unit is None:
         raise conflict("This session no longer matches the teaching requirements; regenerate the timetable.")
     placements = placements_of(tt)
-    occ = build_occupancy(problem, placements, exclude=e.session_key)
-    labels = {k: problem.unit_by_key[k].subject_code for k in problem.unit_by_key}
-    grid = problem.grid
-    rooms = problem.rooms_for(unit)
     cells = []
-    for d in grid.days:
-        for p in range(grid.n_periods(d)):
-            reasons: list[str] = []
-            if not grid.contiguous(d, p, unit.length):
-                cells.append({"day": d, "period": p, "status": "blocked", "reasons": ["Crosses a break or end of day"],
-                              "best_room_id": None})
-                continue
-            cov = grid.covered(d, p, unit.length)
-            for fid in unit.faculty_ids:
-                f = problem.faculty.get(fid)
-                if f and not all(c in f.available for c in cov):
-                    reasons.append(f"{f.name} unavailable")
-                busy = {k for c in cov for k in occ.get(("faculty", fid, *c), [])}
-                if busy and f:
-                    reasons.append(f"{f.name} busy — {', '.join(sorted(labels[k] for k in busy))}")
-            for a in unit.atoms:
-                busy = {k for c in cov for k in occ.get(("atom", a, *c), [])}
-                if busy:
-                    reasons.append(f"Students busy — {', '.join(sorted(labels[k] for k in busy))}")
-                    break
-            free_rooms = [r for r in rooms if problem.room_free(r, d, p, unit.length)
-                          and not any(occ.get(("room", r.id, *c)) for c in cov)]
-            if not free_rooms:
-                reasons.append("No suitable room free")
-            best = None
-            if free_rooms:
-                cur = next((r for r in free_rooms if r.id == e.room_id), None)
-                best = (cur or free_rooms[0]).id
-            pin = problem.pins.get(unit.key)
-            if pin and pin.reason == "fixed" and (pin.day, pin.period) != (d, p):
-                reasons.append("Fixed session")
-            soft = []
-            if not reasons:
-                for fid in unit.faculty_ids:
-                    f = problem.faculty.get(fid)
-                    if f and f.preferred and not all(c in f.preferred for c in cov):
-                        soft.append(f"Outside {f.name}'s preferred time")
-            cells.append({"day": d, "period": p,
-                          "status": "blocked" if reasons else ("warning" if soft else "ok"),
+    for d in problem.grid.days:
+        for p in range(problem.grid.n_periods(d)):
+            reasons, free, soft = explain_slot(problem, placements, e.session_key, d, p)
+            best = next((r.id for r in free if r.id == e.room_id), free[0].id if free else None)
+            cells.append({"day": d, "period": p, "status": "blocked" if reasons else ("warning" if soft else "ok"),
                           "reasons": reasons or soft, "best_room_id": best,
                           "current": (e.day, e.start_period) == (d, p)})
     return {"entry_id": entry_id, "length": unit.length, "cells": cells,
-            "rooms": [{"id": r.id, "code": r.code, "capacity": r.capacity} for r in rooms]}
+            "rooms": [{"id": r.id, "code": r.code, "capacity": r.capacity} for r in problem.rooms_for(unit)]}
 
 
 def set_lock(tt: Timetable, entry_ids: list[str], locked: bool) -> int:

@@ -9,6 +9,7 @@ import { Card, EmptyState, PageHeader } from "@/components/ui/display";
 import { Input } from "@/components/ui/form";
 import { Drawer, Modal } from "@/components/ui/overlay";
 import { DataTable, Pagination, type Column } from "@/components/ui/table";
+import { useAuth } from "@/app/auth";
 import { EntityForm, type FieldDef, type Values } from "./EntityForm";
 
 export interface ResourceConfig<T extends { id: string }> {
@@ -24,8 +25,9 @@ export interface ResourceConfig<T extends { id: string }> {
   toBody?: (v: Values, row?: T) => unknown;
   label: (row: T) => string;
   filters?: (set: (k: string, v: string) => void, f: Record<string, string>) => ReactNode;
-  extraTabs?: (row: T, close: () => void) => ReactNode; // rendered below the form when editing
+  extraTabs?: (row: T, readOnly: boolean) => ReactNode; // rendered below the form when a row is open
   drawerWidth?: string;
+  editPerm?: string; // permission needed to add/change/delete (default: setup.edit)
 }
 
 /** One page implementation for every master-data list (programmes, subjects, faculty, rooms…). */
@@ -41,6 +43,8 @@ export function ResourcePage<T extends { id: string }>({ cfg }: { cfg: ResourceC
   const list = useList<T>(cfg.resource, { q: dq, page, size: 10, ...filters });
   const save = useSave<T>(cfg.resource);
   const remove = useRemove(cfg.resource);
+  const { can } = useAuth();
+  const canEdit = can(cfg.editPerm ?? "setup.edit");
   const [params, setParams] = useSearchParams();
 
   // Deep link from "Fix →" in diagnostics: /faculty?open=<id> opens that record straight away.
@@ -65,7 +69,7 @@ export function ResourcePage<T extends { id: string }>({ cfg }: { cfg: ResourceC
     });
   };
 
-  const columns: Column<T>[] = [
+  const columns: Column<T>[] = !canEdit ? cfg.columns : [
     ...cfg.columns,
     {
       key: "_actions", header: <span className="sr-only">Actions</span>, className: "w-24 text-right",
@@ -84,7 +88,8 @@ export function ResourcePage<T extends { id: string }>({ cfg }: { cfg: ResourceC
   return (
     <>
       <PageHeader title={cfg.title} description={cfg.description}
-        actions={<Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>Add {cfg.singular.toLowerCase()}</Button>} />
+        actions={canEdit ? <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>Add {cfg.singular.toLowerCase()}</Button>
+          : <span className="rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-muted">View only</span>} />
       <Card className="overflow-hidden [&>div]:p-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-line p-4">
           <div className="w-full max-w-xs">
@@ -96,21 +101,21 @@ export function ResourcePage<T extends { id: string }>({ cfg }: { cfg: ResourceC
         <DataTable columns={columns} rows={list.data?.items} loading={list.isLoading} onRowClick={(r) => setEditing(r)}
           empty={<EmptyState icon={cfg.icon} title={q ? "No matches" : `No ${cfg.title.toLowerCase()} yet`}
             description={q ? "Try a different search." : `Add your first ${cfg.singular.toLowerCase()} to get started.`}
-            action={!q && <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>Add {cfg.singular.toLowerCase()}</Button>} />} />
+            action={!q && canEdit && <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>Add {cfg.singular.toLowerCase()}</Button>} />} />
         {list.data && <Pagination page={page} size={list.data.size} total={list.data.total} onPage={setPage} />}
       </Card>
 
       <Drawer open={formOpen} onOpenChange={(o) => !o && close()} width={cfg.drawerWidth}
-        title={editing ? `Edit ${cfg.label(editing)}` : `New ${cfg.singular.toLowerCase()}`}
-        footer={<>
+        title={editing ? (canEdit ? `Edit ${cfg.label(editing)}` : cfg.label(editing)) : `New ${cfg.singular.toLowerCase()}`}
+        footer={canEdit ? <>
           <Button variant="secondary" onClick={close}>Cancel</Button>
-          <Button type="submit" form="entity-form" loading={save.isPending}>Save</Button>
-        </>}>
+          <Button type="submit" form="entity-form" loading={save.isPending}>Save details</Button>
+        </> : <Button variant="secondary" onClick={close}>Close</Button>}>
         {formOpen && (
           <>
-            <EntityForm id="entity-form" fields={cfg.fields} initial={initial}
+            <EntityForm id="entity-form" fields={cfg.fields} initial={initial} readOnly={!canEdit}
               onSubmit={onSubmit} serverErrors={serverErrors} />
-            {editing && cfg.extraTabs?.(editing, close)}
+            {editing && cfg.extraTabs?.(editing, !canEdit)}
           </>
         )}
       </Drawer>

@@ -45,8 +45,6 @@ class CalendarSettings(Base):
     day_start: Mapped[str] = mapped_column(String(5), default="09:00")
     day_end: Mapped[str] = mapped_column(String(5), default="17:00")
     period_minutes: Mapped[int] = mapped_column(Integer, default=60)
-    academic_year: Mapped[str] = mapped_column(String(16), default="2026-27")
-    term_label: Mapped[str] = mapped_column(String(32), default="Odd Semester")
 
 
 class Break(IdMixin, Base):
@@ -132,6 +130,13 @@ class Batch(IdMixin, TimestampMixin, Base):
     group: Mapped[StudentGroup] = relationship(back_populates="batches")
 
 
+faculty_programmes = Table(
+    "faculty_programmes",
+    Base.metadata,
+    Column("faculty_id", ForeignKey("faculty.id", ondelete="CASCADE"), primary_key=True),
+    Column("programme_id", ForeignKey("programmes.id", ondelete="CASCADE"), primary_key=True),
+)
+
 subject_faculty = Table(
     "subject_faculty",
     Base.metadata,
@@ -156,6 +161,12 @@ class Faculty(IdMixin, TimestampMixin, Base):
     availability: Mapped[dict] = mapped_column(JSON, default=dict)
 
     subjects: Mapped[list["Subject"]] = relationship(secondary=subject_faculty, back_populates="faculty")
+    # Programmes this faculty member may be assigned to teach in (empty = any programme).
+    programmes: Mapped[list[Programme]] = relationship(secondary=faculty_programmes, lazy="selectin")
+
+    @property
+    def programme_ids(self) -> list[str]:
+        return [p.id for p in self.programmes]
 
 
 class Subject(IdMixin, TimestampMixin, Base):
@@ -163,6 +174,7 @@ class Subject(IdMixin, TimestampMixin, Base):
 
     code: Mapped[str] = mapped_column(String(24), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
+    short_name: Mapped[str] = mapped_column(String(16), default="")  # e.g. "VAPT" — shown on timetables
     programme_id: Mapped[str] = mapped_column(ForeignKey("programmes.id", ondelete="CASCADE"), index=True)
     semester: Mapped[int] = mapped_column(Integer)
     kind: Mapped[SubjectKind] = mapped_column(_enum(SubjectKind))
@@ -190,6 +202,26 @@ class FixedSession(IdMixin, TimestampMixin, Base):
     day: Mapped[int] = mapped_column(Integer)
     start_period: Mapped[int] = mapped_column(Integer)
     room_id: Mapped[str | None] = mapped_column(ForeignKey("rooms.id", ondelete="SET NULL"))
+    note: Mapped[str | None] = mapped_column(String(160))
+
+
+class RuleKind(StrEnum):
+    CLASS_BLOCK = "CLASS_BLOCK"                      # a class is never scheduled in these periods
+    SUBJECT_WINDOW = "SUBJECT_WINDOW"                # a subject only in these days/hours
+    FACULTY_MAX_CONSECUTIVE = "FACULTY_MAX_CONSECUTIVE"  # no more than N periods in a row
+    ROOM_RESERVED = "ROOM_RESERVED"                  # a room only for some programmes
+
+
+class CustomRule(IdMixin, TimestampMixin, Base):
+    """Structured rules added by coordinators (safe: typed parameters, no free-form code)."""
+
+    __tablename__ = "custom_rules"
+
+    kind: Mapped[RuleKind] = mapped_column(Enum(RuleKind, native_enum=False, length=32))
+    mode: Mapped[ConstraintMode] = mapped_column(_enum(ConstraintMode))
+    weight: Mapped[int] = mapped_column(Integer, default=5)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
     note: Mapped[str | None] = mapped_column(String(160))
 
 

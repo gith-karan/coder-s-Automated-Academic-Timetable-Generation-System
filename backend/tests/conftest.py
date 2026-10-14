@@ -9,6 +9,7 @@ os.environ.update({
     "NFSU_DEMO_PASSWORD": "Demo#Nfsu-2026-Test",
     "NFSU_LOG_DIR": f"{_tmp}/logs",
     "NFSU_SOLVER_WORKERS": "4",
+    "NFSU_TRUSTED_HOSTS": '["testserver"]',
 })
 
 import pytest  # noqa: E402

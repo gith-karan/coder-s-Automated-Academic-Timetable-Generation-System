@@ -4,7 +4,8 @@ import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { Me } from "@/lib/types";
-import { formatDateTime, initials, ROLE_LABEL } from "@/lib/utils";
+import { initials, ROLE_LABEL } from "@/lib/utils";
+import { useTimeFormat } from "@/app/preferences";
 import { useAuth } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import { Card, PageHeader } from "@/components/ui/display";
@@ -13,6 +14,7 @@ import { PasswordForm } from "@/features/auth/ChangePasswordGate";
 
 export default function ProfilePage() {
   const { me, setMe } = useAuth();
+  const { dt } = useTimeFormat();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(me?.full_name ?? "");
   const save = useMutation({
@@ -42,8 +44,8 @@ export default function ProfilePage() {
             <div className="grid grid-cols-3 py-3"><dt className="text-muted">Email</dt><dd className="col-span-2">{me.email}</dd></div>
             <div className="grid grid-cols-3 py-3"><dt className="text-muted">Role</dt><dd className="col-span-2">{ROLE_LABEL[me.role]}</dd></div>
             {me.enrollment_no && <div className="grid grid-cols-3 py-3"><dt className="text-muted">Enrollment no.</dt><dd className="col-span-2">{me.enrollment_no}</dd></div>}
-            <div className="grid grid-cols-3 py-3"><dt className="text-muted">Last sign-in</dt><dd className="col-span-2">{formatDateTime(me.last_login_at)}</dd></div>
-            <div className="grid grid-cols-3 py-3"><dt className="text-muted">Member since</dt><dd className="col-span-2">{formatDateTime(me.created_at)}</dd></div>
+            <div className="grid grid-cols-3 py-3"><dt className="text-muted">Last sign-in</dt><dd className="col-span-2">{dt(me.last_login_at)}</dd></div>
+            <div className="grid grid-cols-3 py-3"><dt className="text-muted">Member since</dt><dd className="col-span-2">{dt(me.created_at)}</dd></div>
           </dl>
         </Card>
         <Card className="lg:col-span-2" title="Change password"><PasswordForm onDone={() => toast.success("Password changed. Other sessions were signed out.")} /></Card>

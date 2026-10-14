@@ -10,12 +10,14 @@ export class ApiError extends Error {
   code: string;
   errors: { field: string; message: string }[];
   violations: Violation[];
+  body: Record<string, unknown>;
   constructor(status: number, body: Record<string, unknown>) {
     super(String(body.detail ?? "Something went wrong"));
     this.status = status;
     this.code = String(body.code ?? "error");
     this.errors = (body.errors as ApiError["errors"]) ?? [];
     this.violations = (body.violations as Violation[]) ?? [];
+    this.body = body;
   }
 }
 

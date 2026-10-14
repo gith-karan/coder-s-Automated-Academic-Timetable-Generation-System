@@ -21,19 +21,29 @@ from app.models.identity import User
 from app.models.timetable import Timetable, TimetableEntry, TimetableStatus
 from app.models.workflow import ChangeRequest, RequestKind, RequestStatus
 from app.scheduling.validator import hard, validate
-from app.services import audit, notifications, system_settings
-from app.services.timetables import check_move, content_hash, placements_of, problem_for
+from app.services import audit, notifications
+from app.services import permissions as perm_service
+from app.services.timetables import check_move, content_hash, placements_of, problem_for, unique_name
 
 # ------------------------------------------------------------------ helpers
-
-
-def _staff_recipients_for(role: Role) -> list[Role]:
-    return [r for r in Role if RANK[r] >= RANK[role]]
 
 
 def _pending_exists(db: Session, kind: RequestKind, target_id: str) -> ChangeRequest | None:
     return db.execute(select(ChangeRequest).where(ChangeRequest.kind == kind, ChangeRequest.target_id == target_id,
                                                   ChangeRequest.status == RequestStatus.PENDING)).scalars().first()
+
+
+def _subject_label(db: Session, subject_id: str) -> str:
+    from app.models.academic import Subject
+
+    s = db.get(Subject, subject_id)
+    return f"{s.short_name or s.code} ({s.code})" if s else "a session"
+
+
+def _reviewers(db: Session, kind: RequestKind, requester: User) -> list[User]:
+    perm = "timetable.publish" if kind == RequestKind.TIMETABLE_PUBLISH else "requests.review"
+    return [u for u in perm_service.users_with(db, perm)
+            if u.id != requester.id and (u.role == Role.ADMIN or RANK[u.role] > RANK[requester.role])]
 
 
 def _create(db: Session, p: Principal, *, kind: RequestKind, reviewer: Role, target_type: str, target_id: str,
@@ -44,9 +54,9 @@ def _create(db: Session, p: Principal, *, kind: RequestKind, reviewer: Role, tar
     db.flush()
     audit.record(db, action=f"request.{kind.value.lower()}.submit", category="WORKFLOW", actor=p.user,
                  entity="change_request", entity_id=cr.id, ctx=p.ctx, summary=title, data={"reason": reason})
-    notifications.notify_roles(db, _staff_recipients_for(reviewer), kind="approval_request", title=title,
-                               body=f"{p.user.full_name} requests approval. {reason}".strip(), link=link,
-                               data={"request_id": cr.id}, exclude_id=p.user.id)
+    notifications.notify(db, _reviewers(db, kind, p.user), kind="approval_request", title=title,
+                         body=f"{p.user.full_name} requests approval. {reason}".strip(), link=link,
+                         data={"request_id": cr.id}, exclude_id=p.user.id)
     return cr
 
 
@@ -61,10 +71,11 @@ def request_availability(db: Session, p: Principal, faculty_id: str, availabilit
     fac = db.get(Faculty, faculty_id)
     if fac is None:
         raise not_found("Faculty")
-    is_staff = p.role in (Role.ADMIN, Role.COORDINATOR)
-    if not is_staff and p.user.faculty_id != faculty_id:
+    own = p.user.faculty_id == faculty_id
+    direct = p.can("setup.edit") or (own and p.can("availability.edit_own"))
+    if not direct and not (own and p.can("availability.request")):
         raise deny(p, f"{p.user.email} tried to change availability of faculty {fac.code}")
-    if is_staff or not system_settings.get(db, "faculty_availability_requires_approval"):
+    if direct:
         before = fac.availability
         apply_availability(db, fac, availability)
         audit.record(db, action="faculty.availability.update", category="DATA", actor=p.user, entity="faculty",
@@ -100,7 +111,8 @@ def request_session_move(db: Session, p: Principal, timetable_id: str, entry_id:
         raise AppError(409, "conflict", f"That slot is not possible: {violations[0].message}",
                        extra={"violations": [v.to_dict() for v in violations]})
     cr = _create(db, p, kind=RequestKind.SESSION_MOVE, reviewer=Role.COORDINATOR, target_type="timetable",
-                 target_id=tt.id, title=f"Move request for {e.session_key.split('|')[0][:8]} in {tt.name}",
+                 target_id=tt.id,
+                 title=f"Move request: {_subject_label(db, e.subject_id)} in {tt.name}",
                  reason=reason, payload={"entry_id": entry_id, "session_key": e.session_key, "from":
                                          [e.day, e.start_period], "to": [day, start_period]}, link="/requests")
     db.commit()
@@ -108,7 +120,8 @@ def request_session_move(db: Session, p: Principal, timetable_id: str, entry_id:
 
 
 def duplicate(db: Session, tt: Timetable, actor: User, name: str | None = None) -> Timetable:
-    copy = Timetable(name=name or f"{tt.name} (revision)", programme_ids=list(tt.programme_ids or []),
+    copy = Timetable(name=name or unique_name(db, tt.name), academic_year=tt.academic_year, term=tt.term,
+                     programme_ids=list(tt.programme_ids or []),
                      semesters=list(tt.semesters or []), parent_id=tt.id, created_by_id=actor.id,
                      quality_score=tt.quality_score, is_complete=tt.is_complete)
     db.add(copy)
@@ -135,10 +148,14 @@ def publish(db: Session, tt: Timetable, actor: User, ctx) -> Timetable:
     for other in db.execute(select(Timetable).where(Timetable.status == TimetableStatus.PUBLISHED,
                                                     Timetable.id != tt.id)).scalars():
         if scope_groups & {e.group_id for e in other.entries}:
-            other.status = TimetableStatus.ARCHIVED
-            audit.record(db, action="timetable.archive", category="TIMETABLE", actor=actor, entity="timetable",
-                         entity_id=other.id, ctx=ctx, summary=f"'{other.name}' archived (superseded by '{tt.name}')")
+            # Only one live version per class: the previous one becomes an ordinary draft again.
+            other.status = TimetableStatus.DRAFT
+            other.notice = f"Unpublished on {utcnow():%d %b %Y}: replaced by '{tt.name}'."
+            other.row_version += 1
+            audit.record(db, action="timetable.unpublish", category="TIMETABLE", actor=actor, entity="timetable",
+                         entity_id=other.id, ctx=ctx, summary=f"'{other.name}' unpublished (replaced by '{tt.name}')")
     tt.status = TimetableStatus.PUBLISHED
+    tt.notice = None
     tt.published_at, tt.published_by_id = utcnow(), actor.id
     tt.content_hash = content_hash(tt)
     tt.is_complete = True
@@ -158,7 +175,7 @@ def submit_for_publish(db: Session, p: Principal, tt: Timetable, note: str) -> d
     if violations:
         raise AppError(409, "not_publishable", "Fix all conflicts and unassigned sessions before publishing.",
                        extra={"violations": [v.to_dict() for v in violations[:50]]})
-    if p.role == Role.ADMIN or not system_settings.get(db, "publish_requires_admin_approval"):
+    if p.can("timetable.publish"):
         publish(db, tt, p.user, p.ctx)
         db.commit()
         return {"published": True, "request": None}
@@ -180,7 +197,9 @@ def review(db: Session, p: Principal, request_id: str, *, approve: bool, comment
         raise not_found("Request")
     if cr.status != RequestStatus.PENDING:
         raise conflict(f"This request was already {cr.status.value.lower()}.")
-    if RANK[p.role] < RANK[cr.reviewer_role]:
+    needed = "timetable.publish" if cr.kind == RequestKind.TIMETABLE_PUBLISH else "requests.review"
+    requester_role = cr.requested_by.role if cr.requested_by else Role.STUDENT
+    if not p.can(needed) or (p.role != Role.ADMIN and RANK[p.role] <= RANK[requester_role]):
         raise deny(p, f"{p.role} attempted to review {cr.kind} request {cr.id}")
     if cr.requested_by_id == p.user.id:
         raise deny(p, f"{p.user.email} attempted to approve their own request {cr.id}")
@@ -206,7 +225,7 @@ def review(db: Session, p: Principal, request_id: str, *, approve: bool, comment
             src = db.get(Timetable, cr.target_id)
             if src is None:
                 raise not_found("Timetable")
-            draft = duplicate(db, src, p.user, f"{src.name} (rev. {utcnow():%d %b %H:%M})")
+            draft = duplicate(db, src, p.user)
             entry = next(e for e in draft.entries if e.session_key == cr.payload["session_key"])
             problem = problem_for(db, draft, keep_locked=False)
             day, period = cr.payload["to"]
@@ -264,9 +283,13 @@ def list_requests(db: Session, p: Principal, *, status: RequestStatus | None, mi
     stmt = select(ChangeRequest).order_by(ChangeRequest.created_at.desc()).limit(200)
     if status:
         stmt = stmt.where(ChangeRequest.status == status)
-    reviewable = [r for r in Role if RANK[r] <= RANK[p.role]]
-    if mine or p.role in (Role.FACULTY, Role.STUDENT):
+    kinds = []
+    if p.can("requests.review"):
+        kinds += [RequestKind.AVAILABILITY, RequestKind.SESSION_MOVE]
+    if p.can("timetable.publish"):
+        kinds.append(RequestKind.TIMETABLE_PUBLISH)
+    if mine or not kinds:
         stmt = stmt.where(ChangeRequest.requested_by_id == p.user.id)
     else:
-        stmt = stmt.where((ChangeRequest.reviewer_role.in_(reviewable)) | (ChangeRequest.requested_by_id == p.user.id))
+        stmt = stmt.where(ChangeRequest.kind.in_(kinds) | (ChangeRequest.requested_by_id == p.user.id))
     return list(db.execute(stmt).unique().scalars())

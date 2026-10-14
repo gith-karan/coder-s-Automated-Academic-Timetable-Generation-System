@@ -22,10 +22,25 @@ export function timeAgo(iso: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-export function formatDateTime(iso: string | null | undefined): string {
+export type TimeFormat = "12h" | "24h";
+
+/** "14:30" -> "2:30 PM" (12h) or unchanged (24h). */
+export function fmtTime(hhmm: string, f: TimeFormat): string {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(hhmm);
+  if (!m || f === "24h") return hhmm;
+  const h = Number(m[1]);
+  return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+/** Re-format every HH:MM inside a sentence (e.g. server messages like "Wed 11:30–13:30"). */
+export function fmtTimesIn(text: string, f: TimeFormat): string {
+  return f === "24h" ? text : text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b(?!\s?[AP]M)/g, (t) => fmtTime(t, f));
+}
+
+export function formatDateTime(iso: string | null | undefined, f: TimeFormat = "12h"): string {
   if (!iso) return "—";
   const d = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
-  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: f === "12h" });
 }
 
 export function initials(name: string): string {

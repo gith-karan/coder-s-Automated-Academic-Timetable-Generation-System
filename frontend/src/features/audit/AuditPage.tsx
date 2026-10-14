@@ -4,7 +4,8 @@ import { ChevronDown, ChevronRight, Fingerprint, Search, ShieldCheck, ShieldX } 
 import { api, qs } from "@/lib/api";
 import { useDebounced } from "@/lib/hooks";
 import type { AuditRow, Paged } from "@/lib/types";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { useTimeFormat } from "@/app/preferences";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, PageHeader, Skeleton } from "@/components/ui/display";
 import { Input, Select } from "@/components/ui/form";
@@ -13,6 +14,7 @@ import { Pagination } from "@/components/ui/table";
 const OUTCOME_TONE = { SUCCESS: "ok", FAILURE: "bad", DENIED: "warn" } as const;
 
 export default function AuditPage() {
+  const { dt } = useTimeFormat();
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
   const [outcome, setOutcome] = useState("");
@@ -23,7 +25,7 @@ export default function AuditPage() {
     queryKey: ["audit", dq, category, outcome, page],
     queryFn: () => api.get<Paged<AuditRow>>(`/audit-logs${qs({ q: dq, category, outcome, page, size: 25 })}`),
   });
-  const verify = useMutation({ mutationFn: () => api.get<{ ok: boolean; checked: number; message: string }>("/audit-logs/verify") });
+  const verify = useMutation({ mutationFn: () => api.get<{ ok: boolean; checked: number; message: string; head?: string; first_invalid_seq?: number | null }>("/audit-logs/verify") });
 
   return (
     <>
@@ -32,7 +34,14 @@ export default function AuditPage() {
       {verify.data && (
         <div role="status" className={cn("mb-4 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium",
           verify.data.ok ? "border-ok/30 bg-ok/10 text-ok" : "border-bad/30 bg-bad/10 text-bad")}>
-          {verify.data.ok ? <ShieldCheck className="size-5" /> : <ShieldX className="size-5" />}{verify.data.message}
+          {verify.data.ok ? <ShieldCheck className="size-5" /> : <ShieldX className="size-5" />}
+          <span>{verify.data.message}
+            <span className="block text-xs font-normal opacity-80">
+              {verify.data.ok
+                ? `Each of the ${verify.data.checked} records' fingerprints was recomputed from its content and the previous record's fingerprint using a secret key kept outside the database, and all matched. Latest fingerprint: ${verify.data.head?.slice(0, 16)}…`
+                : "A record was changed, removed or reordered after it was written. Investigate immediately and restore from backup."}
+            </span>
+          </span>
         </div>
       )}
       <Card className="[&>div]:p-0">
@@ -58,9 +67,9 @@ export default function AuditPage() {
                     <tr className="cursor-pointer border-b border-line/60 hover:bg-surface-2" onClick={() => setOpen(open === r.seq ? null : r.seq)}>
                       <td className="pl-3 text-muted">{open === r.seq ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}</td>
                       <td className="px-3 py-2.5 font-mono text-xs text-muted">{r.seq}</td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-xs">{formatDateTime(r.at)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-xs">{dt(r.at)}</td>
                       <td className="px-3 py-2.5 text-xs"><span className="block">{r.actor_email ?? "—"}</span><span className="text-muted">{r.actor_role ?? ""}</span></td>
-                      <td className="px-3 py-2.5"><span className="block">{r.summary}</span><span className="font-mono text-[11px] text-muted">{r.category} · {r.action}</span></td>
+                      <td className="px-3 py-2.5"><span className="block">{r.summary}</span><span className="text-[11px] capitalize text-muted">{r.category.toLowerCase()}</span></td>
                       <td className="px-3 py-2.5"><Badge tone={OUTCOME_TONE[r.outcome as keyof typeof OUTCOME_TONE] ?? "neutral"}>{r.outcome}</Badge></td>
                       <td className="hidden px-3 py-2.5 font-mono text-xs text-muted md:table-cell">{r.ip ?? "—"}</td>
                     </tr>
@@ -68,7 +77,7 @@ export default function AuditPage() {
                       <tr className="border-b border-line/60 bg-surface-2">
                         <td colSpan={7} className="px-6 py-3">
                           <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-3 font-mono text-[11px]">{JSON.stringify(r.data, null, 2)}</pre>
-                          <p className="mt-2 font-mono text-[10px] text-muted">request {r.request_id ?? "—"} · chain hash {r.hash}</p>
+                          <p className="mt-2 font-mono text-[10px] text-muted">event {r.action} · request {r.request_id ?? "—"} · chain hash {r.hash}</p>
                         </td>
                       </tr>
                     )}

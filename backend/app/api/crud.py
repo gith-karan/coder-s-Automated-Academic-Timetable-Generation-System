@@ -4,7 +4,6 @@ One implementation of list / search / filter / paginate / get / create / update 
 every resource (rooms, programmes, groups, faculty, subjects, …). Resource-specific behaviour is
 injected through small hooks instead of copy-pasted endpoints.
 """
-from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Sequence
@@ -17,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
-from app.api.deps import Principal, require_roles
+from app.api.deps import Principal, require_perm, require_roles
 from app.core.db import get_db
 from app.core.errors import AppError, not_found
 from app.core.roles import Role
@@ -52,8 +51,10 @@ def crud_router(
     create_schema: type[BaseModel],
     update_schema: type[BaseModel],
     out_schema: type[BaseModel],
-    read_roles: Sequence[Role],
-    write_roles: Sequence[Role],
+    read_roles: Sequence[Role] = (),
+    write_roles: Sequence[Role] = (),
+    read_perm: str | None = None,
+    write_perm: str | None = None,
     search: Sequence[InstrumentedAttribute] = (),
     filters: dict[str, InstrumentedAttribute] | None = None,
     order_by: Sequence[Any] = (),
@@ -63,8 +64,8 @@ def crud_router(
 ) -> APIRouter:
     router = APIRouter()
     filters = filters or {}
-    reader = require_roles(*read_roles)
-    writer = require_roles(*write_roles)
+    reader = require_perm(read_perm) if read_perm else require_roles(*read_roles)
+    writer = require_perm(write_perm) if write_perm else require_roles(*write_roles)
 
     def _list(q, page, size, db, flt):
         stmt = select(model)

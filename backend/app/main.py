@@ -9,7 +9,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api.v1 import auth, people, resources, setup, timetables
+from app.api.v1 import auth, people, permissions, resources, setup, timetables
 from app.core.config import get_settings
 from app.core.db import Base, engine
 from app.core.errors import install_error_handlers
@@ -37,7 +37,45 @@ def init_db() -> None:
     import app.models  # noqa: F401 - register models
 
     Base.metadata.create_all(engine)
+    _upgrade_schema()
     install_audit_guards(engine)
+
+
+def _split_short_name(name: str) -> tuple[str, str]:
+    """'Research Methodology [RM]' -> ('RM', 'Research Methodology'); otherwise an acronym of the name."""
+    import re
+
+    m = re.search(r"\s*\[([^\]]{1,16})\]", name)
+    if m:
+        return m.group(1).strip(), (name[:m.start()] + name[m.end():]).strip()
+    if len(name) <= 16:
+        return name, name
+    head = name.split(" — ")[0].strip()
+    if len(head) <= 12 and head != name:
+        return f"{head} Lab" if "lab" in name.lower() or "block" in name.lower() else head, name
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", name) if w and w.lower() not in {"and", "of", "for", "the", "to", "in"}]
+    return ("".join(w[0].upper() for w in words)[:8] or name[:8]), name
+
+
+def _upgrade_schema() -> None:
+    """Small in-place upgrades for existing databases (until Alembic migrations are introduced)."""
+    from sqlalchemy import inspect, text
+
+    cols = {c["name"] for c in inspect(engine).get_columns("timetables")}
+    with engine.begin() as conn:
+        if "notice" not in cols:
+            conn.execute(text("ALTER TABLE timetables ADD COLUMN notice VARCHAR(300)"))
+        subj_cols = {c["name"] for c in inspect(engine).get_columns("subjects")}
+        if "short_name" not in subj_cols:
+            conn.execute(text("ALTER TABLE subjects ADD COLUMN short_name VARCHAR(16) DEFAULT ''"))
+            # Move "[VAPT]"-style abbreviations out of names into the new short-name field.
+            for sid, name in conn.execute(text("SELECT id, name FROM subjects")).fetchall():
+                short, clean = _split_short_name(name)
+                conn.execute(text("UPDATE subjects SET short_name = :s, name = :n WHERE id = :i"),
+                             {"s": short, "n": clean, "i": sid})
+        # The former 'Archived' state is gone: replaced versions are ordinary drafts again.
+        conn.execute(text("UPDATE timetables SET status = 'DRAFT', notice = COALESCE(notice, "
+                          "'Unpublished: replaced by a newer published version') WHERE status = 'ARCHIVED'"))
 
 
 @asynccontextmanager
@@ -72,6 +110,7 @@ def create_app() -> FastAPI:
     v1 = APIRouter(prefix="/api/v1")
     v1.include_router(auth.router)
     v1.include_router(people.router)
+    v1.include_router(permissions.router)
     v1.include_router(resources.router)
     v1.include_router(setup.router)
     v1.include_router(timetables.router)

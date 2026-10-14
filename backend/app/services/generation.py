@@ -118,7 +118,10 @@ class GenerationService:
             run.unassigned = outcome.unassigned
             audit.record(db, action="timetable.generated", category="TIMETABLE", actor=user, entity="timetable",
                          entity_id=tt.id, ctx=ctx, outcome="SUCCESS" if outcome.status == "SUCCESS" else "FAILURE",
-                         summary=f"Generation of '{tt.name}' finished: {outcome.status}",
+                         summary=f"Generation of '{tt.name}' " + {
+                             "SUCCESS": "finished successfully", "INFEASIBLE": "could not place every session",
+                             "PRECHECK_FAILED": "stopped: inputs need attention", "TIMEOUT": "reached its time limit",
+                             "CANCELLED": "was cancelled"}.get(outcome.status, "failed"),
                          data={"run_id": run_id, "scheduled": len(outcome.placements), "total": len(problem.units)})
             title = {"SUCCESS": "Timetable generated successfully", "INFEASIBLE": "Timetable could not be completed",
                      "PRECHECK_FAILED": "Timetable inputs need attention"}.get(outcome.status, f"Generation {outcome.status.lower()}")

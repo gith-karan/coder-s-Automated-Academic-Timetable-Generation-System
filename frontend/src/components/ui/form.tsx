@@ -1,20 +1,25 @@
 import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import * as SwitchPrimitive from "@radix-ui/react-switch";
 import { cn } from "@/lib/utils";
+import { HelpTip } from "./overlay";
 
 const control =
   "w-full rounded-[10px] border border-line bg-surface px-3 text-sm text-ink placeholder:text-muted/70 " +
   "transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 disabled:opacity-60";
 
-export function Field({ label, error, hint, children, htmlFor, required, className }: {
-  label?: ReactNode; error?: string; hint?: ReactNode; children: ReactNode; htmlFor?: string; required?: boolean; className?: string;
+export function Field({ label, error, hint, help, children, htmlFor, required, className }: {
+  label?: ReactNode; error?: string; hint?: ReactNode; help?: ReactNode; children: ReactNode; htmlFor?: string;
+  required?: boolean; className?: string;
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
       {label && (
-        <label htmlFor={htmlFor} className="block text-xs font-medium text-muted">
-          {label} {required && <span className="text-bad">*</span>}
-        </label>
+        <div className="flex items-center gap-1">
+          <label htmlFor={htmlFor} className="block text-xs font-medium text-muted">
+            {label} {required && <span className="text-bad">*</span>}
+          </label>
+          {help && <HelpTip>{help}</HelpTip>}
+        </div>
       )}
       {children}
       {error ? <p className="text-xs text-bad" role="alert">{error}</p> : hint ? <p className="text-xs text-muted">{hint}</p> : null}

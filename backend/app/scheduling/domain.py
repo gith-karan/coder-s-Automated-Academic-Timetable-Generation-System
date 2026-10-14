@@ -51,6 +51,7 @@ class GroupInfo:
     batch_labels: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
     max_per_day: int | None = None
     home_room: str | None = None  # preferred room for the class's lectures (its "Venue")
+    programme_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,28 @@ class Options:
     group_daily_default: int | None = None
 
 
+@dataclass(frozen=True)
+class SubjectWindow:
+    allowed: frozenset[Slot]
+    hard: bool
+    weight: int
+    label: str
+
+
+@dataclass
+class Rules:
+    """Coordinator-defined custom rules, already resolved to periods."""
+
+    group_blocked: dict[str, frozenset[Slot]] = field(default_factory=dict)
+    group_block_label: dict[str, str] = field(default_factory=dict)
+    subject_windows: dict[str, SubjectWindow] = field(default_factory=dict)
+    max_consecutive: dict[str, tuple[int, bool, int]] = field(default_factory=dict)  # faculty id | "*" -> (N, hard, weight)
+    room_programmes: dict[str, frozenset[str]] = field(default_factory=dict)          # room id -> allowed programmes
+
+    def consecutive_for(self, faculty_id: str) -> tuple[int, bool, int] | None:
+        return self.max_consecutive.get(faculty_id) or self.max_consecutive.get("*")
+
+
 @dataclass
 class Problem:
     grid: TimeGrid
@@ -122,6 +145,8 @@ class Problem:
     previous: dict[str, Placement] = field(default_factory=dict)
     options: Options = field(default_factory=Options)
     warnings: list[dict] = field(default_factory=list)
+    rules: Rules = field(default_factory=Rules)
+    scope_errors: list[dict] = field(default_factory=list)
 
     @cached_property
     def unit_by_key(self) -> dict[str, SessionUnit]:
@@ -136,8 +161,13 @@ class Problem:
         g = self.groups.get(gid)
         return (g.max_per_day if g and g.max_per_day else None) or self.options.group_daily_default
 
+    def room_reserved_against(self, unit: SessionUnit, room: RoomInfo) -> bool:
+        allowed = self.rules.room_programmes.get(room.id)
+        g = self.groups.get(unit.group_id)
+        return bool(allowed) and (g is None or g.programme_id not in allowed)
+
     def room_suitable(self, unit: SessionUnit, room: RoomInfo) -> bool:
-        if room.capacity < unit.strength:
+        if room.capacity < unit.strength or self.room_reserved_against(unit, room):
             return False
         if unit.room_kind == LAB:
             return room.kind == LAB and (unit.lab_type is None or room.lab_type == unit.lab_type)
@@ -155,6 +185,12 @@ class Problem:
         if not self.grid.contiguous(day, start, unit.length):
             return False
         cov = self.grid.covered(day, start, unit.length)
+        blocked = self.rules.group_blocked.get(unit.group_id)
+        if blocked and any(s in blocked for s in cov):
+            return False
+        win = self.rules.subject_windows.get(unit.subject_id)
+        if win and win.hard and not all(s in win.allowed for s in cov):
+            return False
         return all(all(s in self.faculty[f].available for s in cov) for f in unit.faculty_ids if f in self.faculty)
 
     @cached_property

@@ -10,6 +10,8 @@ import { usePrefs } from "@/app/preferences";
 import { Card, PageHeader, Tabs } from "@/components/ui/display";
 import { Field, Input, Segmented, Switch } from "@/components/ui/form";
 import { PasswordForm } from "@/features/auth/ChangePasswordGate";
+import { useSearchParams } from "react-router-dom";
+import { PermissionsPanel } from "./PermissionsPanel";
 
 export const THEMES: { value: ColorTheme; label: string; color: string }[] = [
   { value: "nfsu", label: "NFSU", color: "#a8202c" },
@@ -42,33 +44,32 @@ function Preview() {
 
 function SystemSettings() {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["system-settings"], queryFn: () => api.get<Record<string, boolean | number>>("/system-settings") });
+  const { data } = useQuery({ queryKey: ["system-settings"], queryFn: () => api.get<{ solver_time_limit_s: number }>("/system-settings") });
   const save = useMutation({
     mutationFn: (b: Record<string, unknown>) => api.put("/system-settings", b),
     onSuccess: () => { toast.success("System settings saved"); void qc.invalidateQueries({ queryKey: ["system-settings"] }); },
   });
   if (!data) return null;
   return (
-    <div className="space-y-5">
-      <Switch checked={!!data.publish_requires_admin_approval} onCheckedChange={(v) => save.mutate({ publish_requires_admin_approval: v })}
-        label="Publishing requires admin approval" description="Coordinators send timetables for review; an admin approves before anyone sees them." />
-      <Switch checked={!!data.faculty_availability_requires_approval} onCheckedChange={(v) => save.mutate({ faculty_availability_requires_approval: v })}
-        label="Faculty availability changes require approval" description="Faculty requests are reviewed by a coordinator before they affect scheduling." />
-      <Field label="Default solver time limit (seconds)" hint="Upper bound for each generation run (5–120 s). Protects the server from overload.">
-        <Input type="number" min={5} max={120} className="w-32" defaultValue={Number(data.solver_time_limit_s)}
+    <div className="space-y-4">
+      <Field label="Solver safety cap (seconds)" hint="10–300 s. Default 60 s." help="The engine stops on its own the moment it has proven that no better timetable exists (about 5–10 s for typical data); more time does not improve the result. The cap only protects the server against extremely large or contradictory inputs. If it is ever reached, the best timetable found so far is kept and the report says it was not proven optimal.">
+        <Input type="number" min={10} max={300} className="w-32" defaultValue={data.solver_time_limit_s}
           onBlur={(e) => Number(e.target.value) !== data.solver_time_limit_s && save.mutate({ solver_time_limit_s: Number(e.target.value) })} />
       </Field>
+      <p className="text-xs text-muted">Who may publish, and whether faculty availability needs approval, are now set per role under <b>Roles &amp; permissions</b>.</p>
     </div>
   );
 }
 
 export default function SettingsPage() {
-  const { hasRole } = useAuth();
+  const { hasRole, can } = useAuth();
   const { prefs, update } = usePrefs();
-  const [tab, setTab] = useState("appearance");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get("tab") ?? "appearance");
   const tabs = [
     { value: "appearance", label: "Appearance" },
     { value: "preferences", label: "Preferences" },
+    ...(hasRole("ADMIN") || can("permissions.manage") ? [{ value: "permissions", label: "Roles & permissions" }] : []),
     ...(hasRole("ADMIN") ? [{ value: "system", label: "System" }] : []),
     { value: "account", label: "Account" },
   ];
@@ -102,13 +103,19 @@ export default function SettingsPage() {
       {tab === "preferences" && (
         <Card className="max-w-2xl">
           <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span><span className="block text-sm font-medium">Time format</span><span className="block text-xs text-muted">How times are shown everywhere in the app.</span></span>
+              <Segmented value={prefs.time_format ?? "12h"} onChange={(v) => update({ time_format: v })}
+                options={[{ value: "12h", label: "12-hour (2:30 PM)" }, { value: "24h", label: "24-hour (14:30)" }]} />
+            </div>
             <Switch checked={prefs.compact_sidebar} onCheckedChange={(v) => update({ compact_sidebar: v })} label="Compact sidebar" description="Show icons only to give the timetable more room." />
             <Switch checked={prefs.show_tooltips} onCheckedChange={(v) => update({ show_tooltips: v })} label="Show tooltips" description="Explain icon buttons on hover." />
             <Switch checked={prefs.animations} onCheckedChange={(v) => update({ animations: v })} label="Animations" description="Subtle transitions. Turn off for reduced motion." />
           </div>
         </Card>
       )}
-      {tab === "system" && <Card className="max-w-2xl" title="Governance" description="Only admins can change these. Every change is audited."><SystemSettings /></Card>}
+      {tab === "permissions" && <PermissionsPanel />}
+      {tab === "system" && <Card className="max-w-2xl" title="Generation safety" description="Only admins can change this. Every change is audited."><SystemSettings /></Card>}
       {tab === "account" && <Card className="max-w-md" title="Change password"><PasswordForm onDone={() => toast.success("Password changed. Other sessions were signed out.")} /></Card>}
     </>
   );

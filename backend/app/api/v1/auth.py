@@ -8,22 +8,15 @@ from app.core.config import get_settings
 from app.core.db import get_db, utcnow
 from app.core.errors import AppError
 from app.core.ratelimit import limiter
-from app.core.roles import CREATABLE_ROLES, Role
+from app.core.roles import CREATABLE_ROLES
 from app.core.security import hash_password, password_problems, verify_password
 from app.models.identity import User
 from app.schemas.identity import LoginIn, MeOut, OtpRequestIn, OtpVerifyIn, PasswordChangeIn, PreferencesIn, ProfileIn
 from app.services import audit
 from app.services import auth as auth_service
+from app.services import permissions as perm_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-PERMISSIONS: dict[Role, list[str]] = {
-    Role.ADMIN: ["*", "users.manage", "audit.read", "settings.system", "setup.write", "timetable.generate",
-                 "timetable.publish", "requests.review"],
-    Role.COORDINATOR: ["setup.write", "timetable.generate", "timetable.submit", "requests.review", "users.create"],
-    Role.FACULTY: ["timetable.read", "availability.request", "session.request", "users.create"],
-    Role.STUDENT: ["timetable.read"],
-}
 
 
 def _set_cookies(response: Response, token: str, csrf: str, remember: bool) -> None:
@@ -35,9 +28,11 @@ def _set_cookies(response: Response, token: str, csrf: str, remember: bool) -> N
                         samesite="strict", path="/")
 
 
-def _me(user: User, csrf: str | None = None) -> MeOut:
+def _me(db: Session, user: User, csrf: str | None = None) -> MeOut:
     out = MeOut.model_validate(user, from_attributes=True)
-    out.permissions = PERMISSIONS[user.role] + [f"create:{r.value}" for r in CREATABLE_ROLES[user.role]]
+    perms = perm_service.effective(db, user.role)
+    creatable = [f"create:{r.value}" for r in CREATABLE_ROLES[user.role]] if "users.create" in perms else []
+    out.permissions = sorted(perms) + creatable
     out.csrf_token = csrf
     return out
 
@@ -56,7 +51,7 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     user = auth_service.authenticate(db, body.identifier, body.password, ctx)
     token, csrf = auth_service.start_session(db, user, remember=body.remember_me, ctx=ctx, method="password")
     _set_cookies(response, token, csrf, body.remember_me)
-    return _me(user, csrf)
+    return _me(db, user, csrf)
 
 
 @router.post("/otp/request", status_code=202)
@@ -73,7 +68,7 @@ def otp_verify(body: OtpVerifyIn, request: Request, response: Response, db: Sess
     user = auth_service.verify_otp(db, body.identifier, body.code, ctx)
     token, csrf = auth_service.start_session(db, user, remember=body.remember_me, ctx=ctx, method="email OTP")
     _set_cookies(response, token, csrf, body.remember_me)
-    return _me(user, csrf)
+    return _me(db, user, csrf)
 
 
 @router.post("/logout", status_code=204)
@@ -90,10 +85,10 @@ def logout(response: Response, p: Principal = Depends(current_principal), db: Se
 
 
 @router.get("/me", response_model=MeOut)
-def me(p: Principal = Depends(current_principal)):
+def me(p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     # The CSRF token is fixed for the session; the SPA reads it from the (non-HttpOnly) CSRF cookie,
     # so it survives page reloads and works across tabs.
-    return _me(p.user)
+    return _me(db, p.user)
 
 
 @router.post("/password", status_code=204)
@@ -125,7 +120,7 @@ def change_password(body: PasswordChangeIn, request: Request, p: Principal = Dep
 def set_preferences(body: PreferencesIn, p: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     p.user.preferences = body.model_dump()
     db.commit()
-    return _me(p.user)
+    return _me(db, p.user)
 
 
 @router.patch("/me", response_model=MeOut)
@@ -135,4 +130,4 @@ def update_profile(body: ProfileIn, p: Principal = Depends(current_principal), d
     audit.record(db, action="user.profile_update", category="USER", actor=p.user, entity="user", entity_id=p.user.id,
                  ctx=p.ctx, summary="Updated own profile", data={"full_name": {"from": before, "to": body.full_name}})
     db.commit()
-    return _me(p.user)
+    return _me(db, p.user)

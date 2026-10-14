@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowRight, CheckCircle2, Clock, FileEdit, Info, Send, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, FileEdit, Info, Send, XCircle } from "lucide-react";
 import type { Diagnostic, RunStatus, TimetableStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/display";
+import { useTimeFormat } from "@/app/preferences";
 
 export function StatCard({ label, value, icon, tone = "brand", hint, to }: {
   label: string; value: ReactNode; icon: ReactNode; tone?: "brand" | "ok" | "warn" | "info" | "gold"; hint?: ReactNode; to?: string;
@@ -57,9 +58,8 @@ export function Donut({ segments, center, sub }: { segments: { label: string; va
 export function TimetableStatusBadge({ status }: { status: TimetableStatus }) {
   const map = {
     DRAFT: { tone: "neutral", icon: <FileEdit className="size-3" />, label: "Draft" },
-    IN_REVIEW: { tone: "warn", icon: <Send className="size-3" />, label: "In review" },
+    IN_REVIEW: { tone: "warn", icon: <Send className="size-3" />, label: "Awaiting approval" },
     PUBLISHED: { tone: "ok", icon: <CheckCircle2 className="size-3" />, label: "Published" },
-    ARCHIVED: { tone: "neutral", icon: <Clock className="size-3" />, label: "Archived" },
   } as const;
   const m = map[status];
   return <Badge tone={m.tone} icon={m.icon}>{m.label}</Badge>;
@@ -77,6 +77,7 @@ const FIX_PATH: Record<string, string> = {
 
 /** Plain-English problem list with "Fix →" deep links (used by Generate review + Generation Report). */
 export function DiagnosticList({ items, empty }: { items: Diagnostic[]; empty?: ReactNode }) {
+  const { tx } = useTimeFormat();
   if (!items.length) return <>{empty}</>;
   return (
     <ul className="divide-y divide-line">
@@ -88,10 +89,9 @@ export function DiagnosticList({ items, empty }: { items: Diagnostic[]; empty?: 
           <li key={i} className="flex items-start gap-3 py-3">
             <Icon className={cn("mt-0.5 size-5 shrink-0", error ? "text-bad" : "text-warn")} />
             <div className="min-w-0 flex-1">
-              <p className="text-sm">{d.message}</p>
+              <p className="text-sm">{tx(d.message)}</p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 <Badge tone={error ? "bad" : "warn"}>{error ? "Must fix" : "Warning"}</Badge>
-                <span className="font-mono text-[10px] text-muted">{d.code}</span>
                 {d.entities?.slice(0, 3).map((e) => <Badge key={e.type + e.id} tone="neutral">{e.label}</Badge>)}
               </div>
             </div>

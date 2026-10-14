@@ -1,8 +1,8 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { X } from "lucide-react";
+import { Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ tooltip */
@@ -134,3 +134,29 @@ export function MenuItem({ children, onSelect, danger, icon }: { children: React
 
 export const MenuSeparator = () => <Menu.Separator className="my-1 h-px bg-line" />;
 export const TooltipProvider = Tooltip.Provider;
+
+/* ------------------------------------------------------------------ help icon (ⓘ) */
+/** Small info icon that reveals an explanation on hover, focus or tap. Always available, even when
+ *  button tooltips are switched off, because it is explicit help the user asked for. */
+export function HelpTip({ children, label = "More information", side = "top" }: {
+  children: ReactNode; label?: string; side?: "top" | "bottom" | "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip.Root delayDuration={100} open={open} onOpenChange={setOpen}>
+      <Tooltip.Trigger asChild>
+        <button type="button" aria-label={label} onClick={(e) => { e.preventDefault(); setOpen((o) => !o); }}
+          className="inline-grid size-5 shrink-0 place-items-center rounded-full align-middle text-muted transition-colors hover:text-brand focus-visible:outline-2 focus-visible:outline-brand">
+          <Info className="size-4" />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content side={side} sideOffset={6} collisionPadding={12}
+          className="z-[60] max-w-sm rounded-lg bg-[#111827] px-3 py-2 text-xs leading-relaxed text-white shadow-lg animate-fade-in">
+          {children}
+          <Tooltip.Arrow className="fill-[#111827]" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}

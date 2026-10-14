@@ -7,21 +7,22 @@ import { Ban, Coffee, Lock, Unlock } from "lucide-react";
 import type { Entry, Grid, MoveCell } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Tip } from "@/components/ui/overlay";
+import { useTimeFormat } from "@/app/preferences";
 
 const ROW_H = 74;
 const BREAK_H = 26;
 
 type Row = { kind: "period"; index: number; start: string; end: string } | { kind: "break"; label: string };
 
-function buildRows(grid: Grid): Row[] {
+function buildRows(grid: Grid, t: (s: string) => string): Row[] {
   const periods = grid.days[0]?.periods ?? [];
   const rows: Row[] = [];
   periods.forEach((p, i) => {
     if (i > 0 && periods[i - 1].end !== p.start) {
       const b = grid.breaks.find((x) => x.start >= periods[i - 1].end && x.end <= p.start);
-      rows.push({ kind: "break", label: `${b?.name ?? "Break"} · ${periods[i - 1].end}–${p.start}` });
+      rows.push({ kind: "break", label: `${b?.name ?? "Break"} · ${t(periods[i - 1].end)}–${t(p.start)}` });
     }
-    rows.push({ kind: "period", index: p.index, start: p.start, end: p.end });
+    rows.push({ kind: "period", index: p.index, start: t(p.start), end: t(p.end) });
   });
   return rows;
 }
@@ -69,7 +70,7 @@ function Chip({ e, editable, onToggleLock, onClick, overlay }: {
       {...(overlay ? {} : attributes)}
       {...(overlay ? {} : listeners)}
       onClick={() => onClick?.(e)}
-      aria-label={`${e.subject.code} ${e.subject.name}${e.batch ? `, batch ${e.batch.name}` : ""}, ${faculty}, room ${e.room?.code ?? "unassigned"}${e.locked ? ", locked" : ""}`}
+      aria-label={`${e.subject.short_name} (${e.subject.code}) ${e.subject.name}${e.batch ? `, batch ${e.batch.name}` : ""}, ${faculty}, room ${e.room?.code ?? "unassigned"}${e.locked ? ", locked" : ""}`}
       className={cn(
         `chip chip-${e.color} group relative flex h-full flex-col overflow-hidden rounded-lg border pl-2.5 pr-1.5 py-1.5 text-left text-[11px] leading-tight`,
         editable && !e.locked && "cursor-grab active:cursor-grabbing",
@@ -80,7 +81,7 @@ function Chip({ e, editable, onToggleLock, onClick, overlay }: {
     >
       <span className="chip-bar absolute inset-y-0 left-0 w-1" />
       <span className="flex items-center gap-1">
-        <b className="truncate text-[12px]">{e.subject.code}</b>
+        <b className="truncate text-[13px] leading-tight">{e.subject.short_name}</b>
         {e.batch && <span className="rounded bg-black/8 px-1 text-[10px] font-semibold dark:bg-white/10">{e.batch.name}</span>}
         {onToggleLock && editable ? (
           <button
@@ -93,10 +94,16 @@ function Chip({ e, editable, onToggleLock, onClick, overlay }: {
           </button>
         ) : e.locked ? <Lock className="ml-auto size-3" /> : null}
       </span>
+      <span className="truncate text-[10px] font-medium opacity-70">{e.subject.code}</span>
       <span className="truncate opacity-80">{e.room?.code ?? "No room"}</span>
       <span className="truncate opacity-70">{faculty}</span>
     </div>
   );
+}
+
+function TimeText({ text }: { text: string }) {
+  const { tx } = useTimeFormat();
+  return <>{tx(text)}</>;
 }
 
 function Cell({ id, row, col, status, reasons }: { id: string; row: number; col: number; status?: MoveCell["status"]; reasons?: string[] }) {
@@ -108,7 +115,7 @@ function Cell({ id, row, col, status, reasons }: { id: string; row: number; col:
       {status === "blocked" && isOver && <Ban className="absolute right-1 top-1 size-3.5 text-bad" />}
     </div>
   );
-  return reasons?.length ? <Tip label={reasons.join(" · ")}>{cell}</Tip> : cell;
+  return reasons?.length ? <Tip label={<TimeText text={reasons.join(" · ")} />}>{cell}</Tip> : cell;
 }
 
 export interface TimetableGridProps {
@@ -123,7 +130,8 @@ export interface TimetableGridProps {
 }
 
 export function TimetableGrid({ grid, entries, unassigned = [], editable, loadOptions, onMove, onToggleLock, onEntryClick }: TimetableGridProps) {
-  const rows = useMemo(() => buildRows(grid), [grid]);
+  const { t, format } = useTimeFormat();
+  const rows = useMemo(() => buildRows(grid, t), [grid, format]); // eslint-disable-line react-hooks/exhaustive-deps
   const rowOf = useMemo(() => {
     const m = new Map<number, number>();
     rows.forEach((r, i) => r.kind === "period" && m.set(r.index, i + 2));
@@ -151,7 +159,7 @@ export function TimetableGrid({ grid, entries, unassigned = [], editable, loadOp
     onMove?.(e, d, p);
   };
 
-  const template = `88px repeat(${grid.days.length}, minmax(132px, 1fr))`;
+  const template = `96px repeat(${grid.days.length}, minmax(132px, 1fr))`;
   const rowTemplate = `40px ${rows.map((r) => (r.kind === "period" ? `${ROW_H}px` : `${BREAK_H}px`)).join(" ")}`;
 
   return (
@@ -172,7 +180,7 @@ export function TimetableGrid({ grid, entries, unassigned = [], editable, loadOp
               </div>
             ) : (
               <div key={`p${ri}`} style={{ gridRow: ri + 2, gridColumn: 1 }} className="sticky left-0 z-20 flex flex-col justify-center bg-surface pr-2 text-[11px] tabular-nums text-muted">
-                <span className="font-semibold text-ink">P{r.index + 1}</span>{r.start}–{r.end}
+                <span className="font-semibold text-ink">P{r.index + 1}</span><span className="whitespace-nowrap">{r.start}</span><span className="whitespace-nowrap opacity-80">– {r.end}</span>
               </div>
             ),
           )}

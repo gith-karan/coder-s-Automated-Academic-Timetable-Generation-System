@@ -55,7 +55,10 @@ def _problem(request: Request, status: int, code: str, detail: str, extra: dict 
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError):
-        return _problem(request, exc.status, exc.code, exc.detail, exc.extra)
+        resp = _problem(request, exc.status, exc.code, exc.detail, exc.extra)
+        if exc.status == 429 and "retry_after_s" in exc.extra:
+            resp.headers["Retry-After"] = str(exc.extra["retry_after_s"])
+        return resp
 
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError):

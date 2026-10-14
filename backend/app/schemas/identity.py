@@ -41,6 +41,7 @@ class PreferencesIn(StrictModel):
     compact_sidebar: bool = False
     show_tooltips: bool = True
     animations: bool = True
+    time_format: Literal["12h", "24h"] = "12h"
 
 
 class ProfileIn(StrictModel):

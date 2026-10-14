@@ -8,6 +8,7 @@ export interface Preferences {
   compact_sidebar: boolean;
   show_tooltips: boolean;
   animations: boolean;
+  time_format: "12h" | "24h";
 }
 
 export interface Me {
@@ -64,10 +65,11 @@ export interface Availability {
 export interface Faculty {
   id: string; code: string; name: string; email: string; designation: string; school: string;
   max_periods_per_day: number | null; max_periods_per_week: number | null; availability: Availability;
+  programme_ids: string[];
 }
 
 export interface Subject {
-  id: string; code: string; name: string; programme_id: string; semester: number; kind: "THEORY" | "PRACTICAL";
+  id: string; code: string; name: string; short_name: string; programme_id: string; semester: number; kind: "THEORY" | "PRACTICAL";
   periods_per_week: number; sessions_per_week: number; consecutive_periods: number; lab_type_id: string | null;
   lab_type: LabType | null; credits: number | null; faculty: { id: string; code: string; name: string }[];
 }
@@ -81,23 +83,24 @@ export interface Grid {
 
 export interface CalendarData {
   working_days: number[]; day_start: string; day_end: string; period_minutes: number;
-  academic_year: string; term_label: string;
   breaks: { name: string; start_time: string; end_time: string; days: number[] | null }[];
   grid: Grid;
 }
 
-export type TimetableStatus = "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "ARCHIVED";
+export type TimetableStatus = "DRAFT" | "IN_REVIEW" | "PUBLISHED";
 export interface TimetableSummary {
   id: string; name: string; status: TimetableStatus; quality_score: number | null; is_complete: boolean;
   row_version: number; programme_ids: string[]; semesters: number[]; total_sessions: number; scheduled: number;
   unassigned: number; locked: number; created_at: string | null; updated_at: string | null;
   submitted_at: string | null; published_at: string | null; review_comment: string | null;
-  parent_id: string | null; last_run_id: string | null;
+  parent_id: string | null; last_run_id: string | null; academic_year: string | null; term: "ODD" | "EVEN" | null;
+  notice: string | null;
+  room_use_pct?: number;
 }
 
 export interface Entry {
   id: string; session_key: string; day: number | null; start_period: number | null; length: number; locked: boolean;
-  subject: { id: string; code: string; name: string; kind: "THEORY" | "PRACTICAL" };
+  subject: { id: string; code: string; name: string; short_name: string; kind: "THEORY" | "PRACTICAL" };
   group: { id: string; label: string; programme_id: string | null; semester: number | null };
   batch: { id: string; name: string } | null;
   faculty: { id: string; name: string; code: string }[];
@@ -167,11 +170,24 @@ export interface ConstraintItem {
 
 export interface Dashboard {
   counts: { programmes: number; subjects: number; faculty: number; rooms: number; labs: number; classes: number };
-  timetable?: TimetableSummary;
-  overview?: { allocated_pct: number; available_pct: number; unassigned: number; quality: number | null };
+  timetables: TimetableSummary[];
   published: { id: string; name: string; published_at: string } | null;
   pending_requests?: number;
   last_run?: { id: string; status: RunStatus; created_at: string } | null;
   recent_activity?: { action: string; summary: string; at: string; actor: string | null; category: string }[];
   users?: Record<Role, number>;
 }
+
+export type RuleKind = "CLASS_BLOCK" | "SUBJECT_WINDOW" | "FACULTY_MAX_CONSECUTIVE" | "ROOM_RESERVED";
+export interface CustomRule {
+  id: string; kind: RuleKind; mode: "HARD" | "SOFT" | "OFF"; weight: number; enabled: boolean;
+  params: Record<string, unknown>; note: string | null;
+}
+
+export interface PermissionDef { key: string; group: string; label: string; description: string; ceiling: Role }
+export interface PermissionsView {
+  catalogue: PermissionDef[]; matrix: Record<"COORDINATOR" | "FACULTY" | "STUDENT", string[]>;
+  editable_roles: Role[]; my_permissions: string[];
+}
+
+export interface MoveSuggestion { day: number; period: number; label: string; room: string }
